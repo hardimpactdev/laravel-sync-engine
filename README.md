@@ -34,6 +34,30 @@ specs and the handlers that call its own domain actions.
 | TypeScript tests     | `npm test`                      |
 | TypeScript typecheck | `npm run typecheck`             |
 
+## Phone store
+
+```ts
+import { createLocalStore, migrate, syncEngineSchemaV1 } from "@hardimpactdev/household-sync";
+import { useLocalQuery } from "@hardimpactdev/household-sync/react";
+
+migrate(db, [syncEngineSchemaV1, appSchema]);
+const store = createLocalStore(db, {
+    tables: ["rooms", "items", "counters"],
+    entities: {
+        items: { references: { room_id: "rooms" }, serverOwned: ["illustration"] },
+        counters: { operations: { adjust: { counters: [{ field: "quantity", delta: "delta" }] } } },
+    },
+    newId,
+});
+
+store.update("items", itemId, { name: "Dishwasher" });
+store.operate("counters", counterId, "adjust", { delta: 1 });
+```
+
+A sync run calls `takeBatch`, posts the changes, then `applyAcks` and
+`applyPullPage` with the parsed response, or `returnToPending` when the request
+fails. The HTTP client, realtime pokes and the file queue come next.
+
 ## Status
 
 Under construction. The phone side starts from Mealou's local store (Mealou PR
