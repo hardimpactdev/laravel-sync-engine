@@ -1,0 +1,10 @@
+{
+    "change_id": "01JBC5A2W4F8H0K2M4P6R8T0V2",
+    "status": "rejected",
+    "error": {
+        "code": "validation",
+        "message": "The name field is required.",
+        "fields": { "name": ["The name field is required."] }
+    },
+    "current": { "name": "Dishwasher", "room_id": "01J9ZZ0A1B2C3D4E5F6G7H8J9K", "notes": null }
+}

@@ -1,0 +1,45 @@
+{
+    "name": "hardimpactdev/household-sync",
+    "description": "Local-first sync for Laravel and Expo: outbox, per-household change feed, real-time pokes.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.4",
+        "illuminate/contracts": "^13.0",
+        "illuminate/database": "^13.0",
+        "illuminate/http": "^13.0",
+        "illuminate/support": "^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^11.0",
+        "pestphp/pest": "^5.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "HardImpact\\HouseholdSync\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "HardImpact\\HouseholdSync\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "HardImpact\\HouseholdSync\\HouseholdSyncServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "pest"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

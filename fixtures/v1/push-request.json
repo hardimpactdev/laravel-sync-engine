@@ -1,0 +1,35 @@
+{
+    "protocol": 1,
+    "client_id": "01JBC4Y0R8T5D8M4QKX3N2V6ZA",
+    "cursor": "opaque-cursor-1",
+    "entities": ["items", "rooms", "counters"],
+    "changes": [
+        {
+            "change_id": "01JBC5A2W4F8H0K2M4P6R8T0V2",
+            "entity": "items",
+            "id": "01JBC59ZQ0B2D4F6H8K0M2P4R6",
+            "op": "upsert",
+            "base_seq": 4182,
+            "fields": { "name": "Dishwasher", "room_id": "01J9ZZ0A1B2C3D4E5F6G7H8J9K" },
+            "depends_on": [],
+            "client_time": "2026-10-20T09:58:11.204Z"
+        },
+        {
+            "change_id": "01JBC5A3X5G9J1L3N5Q7S9V1X3",
+            "entity": "counters",
+            "id": "01JBC5A3X5G9J1L3N5Q7S9V1X4",
+            "op": "adjust",
+            "args": { "name": "Milk", "delta": 1 },
+            "base_seq": null,
+            "client_time": "2026-10-20T09:58:13.019Z"
+        },
+        {
+            "change_id": "01JBC5A4Y6H0K2M4P6R8T0V2X4",
+            "entity": "rooms",
+            "id": "01J9YY7Q6R5S4T3V2W1X0Y9Z8A",
+            "op": "delete",
+            "base_seq": 4100,
+            "client_time": "2026-10-20T09:58:14.502Z"
+        }
+    ]
+}

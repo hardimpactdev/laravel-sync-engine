@@ -1,0 +1,18 @@
+{
+    "name": "@hardimpactdev/household-sync",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Local-first sync for Expo apps: SQLite store with an outbox, sync client and realtime pokes.",
+    "type": "module",
+    "exports": {
+        ".": "./js/src/index.ts"
+    },
+    "files": [
+        "js/src",
+        "fixtures"
+    ],
+    "scripts": {
+        "test": "tsx --test js/tests/*.test.ts",
+        "typecheck": "tsc --noEmit"
+    }
+}

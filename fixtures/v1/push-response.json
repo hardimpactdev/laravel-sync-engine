@@ -1,0 +1,33 @@
+{
+    "protocol": 1,
+    "acks": [
+        { "change_id": "01JBC5A2W4F8H0K2M4P6R8T0V2", "status": "applied", "seq": 4190 },
+        {
+            "change_id": "01JBC5A3X5G9J1L3N5Q7S9V1X3",
+            "status": "applied",
+            "seq": 4191,
+            "remap": { "from": "01JBC5A3X5G9J1L3N5Q7S9V1X4", "to": "01JAQ0M8N6P4R2T0V8X6Z4B2D0" }
+        },
+        { "change_id": "01JBC5A4Y6H0K2M4P6R8T0V2X4", "status": "applied", "seq": 4192 }
+    ],
+    "changes": [
+        {
+            "entity": "items",
+            "id": "01JBC59ZQ0B2D4F6H8K0M2P4R6",
+            "seq": 4190,
+            "op": "upsert",
+            "row": { "name": "Dishwasher", "room_id": "01J9ZZ0A1B2C3D4E5F6G7H8J9K", "notes": null }
+        },
+        {
+            "entity": "counters",
+            "id": "01JAQ0M8N6P4R2T0V8X6Z4B2D0",
+            "seq": 4191,
+            "op": "upsert",
+            "row": { "name": "Milk", "quantity": 3 }
+        },
+        { "entity": "rooms", "id": "01J9YY7Q6R5S4T3V2W1X0Y9Z8A", "seq": 4192, "op": "delete" }
+    ],
+    "cursor": "opaque-cursor-2",
+    "has_more": false,
+    "server_time": "2026-10-20T09:58:14Z"
+}

@@ -1,0 +1,5 @@
+{
+    "channel": "private-households.01J9XX0A1B2C3D4E5F6G7H8J9K.sync",
+    "event": "household.changed",
+    "data": { "seq": 4192, "client_id": "01JBC4Y0R8T5D8M4QKX3N2V6ZA" }
+}
