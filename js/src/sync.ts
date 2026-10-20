@@ -286,6 +286,7 @@ function toWire(entry: OutboxEntry): WireChange {
         op: entry.op,
         ...(entry.op === "upsert" ? { fields: payload } : entry.op === "delete" ? {} : { args: payload }),
         base_seq: entry.base_seq,
+        position: entry.position,
         ...(entry.depends_on === null ? {} : { depends_on: files(entry) }),
         client_time: entry.created_at,
     };

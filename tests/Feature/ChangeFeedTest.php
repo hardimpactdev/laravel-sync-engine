@@ -196,7 +196,7 @@ it('validates the envelope', function (array $body, int $status, string $code): 
     'unknown entity' => [['entities' => ['cats']], 422, 'invalid_request'],
     'bad client id' => [['client_id' => 'abc'], 422, 'invalid_request'],
     'garbled cursor' => [['cursor' => 'nope'], 422, 'invalid_request'],
-    'pushed changes' => [['changes' => [['change_id' => 'x']]], 422, 'invalid_request'],
+    'malformed change' => [['changes' => [['change_id' => 'x']]], 422, 'invalid_request'],
 ]);
 
 it('answers in the shape of the protocol fixture', function (): void {

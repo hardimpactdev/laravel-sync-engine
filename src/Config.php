@@ -24,6 +24,26 @@ final class Config
         return config()->string('household-sync.tables.tombstones');
     }
 
+    public static function receiptsTable(): string
+    {
+        return config()->string('household-sync.tables.receipts');
+    }
+
+    public static function aliasesTable(): string
+    {
+        return config()->string('household-sync.tables.aliases');
+    }
+
+    public static function clientsTable(): string
+    {
+        return config()->string('household-sync.tables.clients');
+    }
+
+    public static function receiptDays(): int
+    {
+        return config()->integer('household-sync.receipt_days');
+    }
+
     public static function pageSize(): int
     {
         return config()->integer('household-sync.page_size');

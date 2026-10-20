@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace HardImpact\HouseholdSync\Tests;
 
+use HardImpact\HouseholdSync\HouseholdSyncSequence;
 use HardImpact\HouseholdSync\HouseholdSyncServiceProvider;
 use HardImpact\HouseholdSync\SyncEntities;
+use HardImpact\HouseholdSync\Tests\Fixtures\CounterEntity;
 use HardImpact\HouseholdSync\Tests\Fixtures\ItemEntity;
 use HardImpact\HouseholdSync\Tests\Fixtures\RoomEntity;
 use Illuminate\Database\Schema\Blueprint;
@@ -38,6 +40,17 @@ abstract class TestCase extends Orchestra
             $table->timestamps();
         });
 
+        Schema::create('counters', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('household_id');
+            $table->char('sync_id', 26)->unique();
+            $table->unsignedBigInteger('change_seq')->nullable();
+            $table->string('name');
+            $table->integer('quantity')->default(0);
+            $table->timestamps();
+            $table->unique(['household_id', 'name']);
+        });
+
         Schema::create('items', function (Blueprint $table): void {
             $table->id();
             $table->unsignedBigInteger('household_id');
@@ -56,6 +69,8 @@ abstract class TestCase extends Orchestra
     {
         parent::setUp();
 
-        $this->app->make(SyncEntities::class)->register(new ItemEntity, new RoomEntity);
+        HouseholdSyncSequence::flushState();
+
+        $this->app->make(SyncEntities::class)->register(new ItemEntity, new RoomEntity, new CounterEntity);
     }
 }

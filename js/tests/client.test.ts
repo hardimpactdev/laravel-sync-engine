@@ -262,3 +262,31 @@ test("the scheduler survives a run that throws and reports when it is idle", asy
     assert.deepEqual(timers, [500], "a thrown run retries after a backoff");
 });
 
+test("a pull waits while the server has seen changes whose acks were lost", async () => {
+    const { store } = setup();
+    pulled(store, "counters", "01JBC5A3X5G9J1L3N5Q7S9V1X4", { name: "Milk", quantity: 2 }, 4);
+    store.operate("counters", "01JBC5A3X5G9J1L3N5Q7S9V1X4", "adjust", { name: "Milk", delta: 1 });
+
+    const server = scripted(
+        // The server applied the change, but this answer never reached the phone.
+        new TypeError("Network request failed"),
+        // A later answer with the new total, but without the ack.
+        page([{ entity: "counters", id: "01JBC5A3X5G9J1L3N5Q7S9V1X4", seq: 5, op: "upsert", row: { name: "Milk", quantity: 3 } }], "c5"),
+        // The resend gets its ack from the receipt, and the page comes again.
+        (body) => page([{ entity: "counters", id: "01JBC5A3X5G9J1L3N5Q7S9V1X4", seq: 5, op: "upsert", row: { name: "Milk", quantity: 3 } }], "c5", false, [
+            { change_id: body.changes[0].change_id, status: "duplicate", seq: 5 },
+        ]),
+    );
+    const transport: SyncTransport = async (body) => {
+        const answer = await server.transport(body);
+        if (server.sent.length === 2) (answer.body as Record<string, unknown>).last_position = body.changes[0]?.position ?? 1;
+        return answer;
+    };
+    const sync = createSyncClient({ store, householdId: household, clientId: client, entities: ["counters"], transport });
+
+    assert.deepEqual(await sync.sync(), { status: "offline" });
+    assert.equal((await sync.sync()).status, "synced");
+    assert.equal(store.get<{ quantity: number }>("SELECT quantity FROM counters")?.quantity, 3, "the delta counts once");
+    assert.deepEqual(outbox(store), []);
+});
+

@@ -6,6 +6,7 @@ namespace HardImpact\HouseholdSync;
 
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\DB;
 
 /** Deletes as feed entries. A tombstone carries the seq of the delete. */
 final class Tombstones
@@ -33,6 +34,18 @@ final class Tombstones
     public static function forget(ConnectionInterface $connection, string $entity, string $syncId): void
     {
         $connection->table(self::table())->where('entity', $entity)->where('sync_id', $syncId)->delete();
+    }
+
+    public static function exists(int $householdId, string $entity, string $syncId): bool
+    {
+        return DB::table(self::table())->where('household_id', $householdId)->where('entity', $entity)->where('sync_id', $syncId)->exists();
+    }
+
+    public static function seqOf(string $entity, string $syncId): ?int
+    {
+        $seq = DB::table(self::table())->where('entity', $entity)->where('sync_id', $syncId)->value('change_seq');
+
+        return $seq === null ? null : Config::int($seq);
     }
 
     public static function table(): string

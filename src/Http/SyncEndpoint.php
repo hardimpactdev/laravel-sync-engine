@@ -9,6 +9,7 @@ use HardImpact\HouseholdSync\Exceptions\SyncRequestFailed;
 use HardImpact\HouseholdSync\Feed\FeedChange;
 use HardImpact\HouseholdSync\Feed\SyncFeed;
 use HardImpact\HouseholdSync\HouseholdSyncSequence;
+use HardImpact\HouseholdSync\Push\PushApplier;
 use HardImpact\HouseholdSync\SyncCursor;
 use HardImpact\HouseholdSync\SyncEntities;
 use Illuminate\Http\JsonResponse;
@@ -22,13 +23,14 @@ use Illuminate\Validation\Rule;
  * The sync endpoint (protocol §3). The app's controller authenticates the user,
  * checks membership and passes the household's server id.
  *
- * This version serves pulls. Pushes arrive with the push applier.
+ * Pushed changes are applied first, so the pull page includes them.
  */
 final readonly class SyncEndpoint
 {
     public function __construct(
         private SyncEntities $entities,
         private SyncFeed $feed,
+        private PushApplier $push,
     ) {}
 
     public function respond(Request $request, int $householdId): JsonResponse
@@ -56,6 +58,18 @@ final readonly class SyncEndpoint
             'entities' => ['required', 'array', 'min:1'],
             'entities.*' => ['required', 'string', 'distinct', Rule::in($this->entities->names())],
             'changes' => ['present', 'array', 'max:100'],
+            'changes.*' => ['array'],
+            'changes.*.change_id' => ['required', 'string', 'distinct', 'regex:/^[0-9A-HJKMNP-TV-Z]{26}$/'],
+            'changes.*.entity' => ['required', 'string', 'max:64'],
+            'changes.*.id' => ['required', 'string', 'regex:/^[0-9A-HJKMNP-TV-Z]{26}$/'],
+            'changes.*.op' => ['required', 'string', 'max:64'],
+            'changes.*.fields' => ['sometimes', 'array'],
+            'changes.*.args' => ['sometimes', 'array'],
+            'changes.*.base_seq' => ['nullable', 'integer', 'min:0'],
+            'changes.*.depends_on' => ['sometimes', 'array'],
+            'changes.*.merge' => ['sometimes', 'boolean'],
+            'changes.*.position' => ['sometimes', 'integer', 'min:1'],
+            'changes.*.client_time' => ['sometimes', 'nullable', 'string', 'max:64'],
             'limit' => ['nullable', 'integer', 'min:1', 'max:'.Config::pageSize()],
         ]);
 
@@ -66,18 +80,18 @@ final readonly class SyncEndpoint
             throw SyncRequestFailed::invalidRequest('The sync request is not valid.', $fields);
         }
 
-        /** @var array{client_id: string, cursor?: string|null, entities: list<string>, changes: list<mixed>, limit?: int|null} $input */
+        /** @var array{client_id: string, cursor?: string|null, entities: list<string>, limit?: int|null} $input */
         $input = $validator->validated();
-
-        if ($input['changes'] !== []) {
-            throw SyncRequestFailed::invalidRequest('This server does not accept changes yet.');
-        }
+        /** @var list<array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int}> $changes */
+        $changes = array_values((array) $request->input('changes'));
 
         $afterSeq = SyncCursor::decode($input['cursor'] ?? null, $householdId);
 
         if ($afterSeq > 0 && $afterSeq < HouseholdSyncSequence::floor(DB::connection(), $householdId)) {
             throw SyncRequestFailed::resyncRequired();
         }
+
+        $acks = $changes === [] ? [] : $this->push->apply($householdId, $input['client_id'], $changes);
 
         $page = $this->feed->page(
             $householdId,
@@ -88,10 +102,11 @@ final readonly class SyncEndpoint
 
         return new JsonResponse([
             'protocol' => $protocol,
-            'acks' => [],
+            'acks' => $acks,
             'changes' => array_map(fn (FeedChange $change): array => $change->toArray(), $page->changes),
             'cursor' => SyncCursor::encode($householdId, $page->lastSeq),
             'has_more' => $page->hasMore,
+            'last_position' => $this->push->lastPosition($householdId, $input['client_id']),
             'server_time' => Date::now()->utc()->format('Y-m-d\TH:i:s\Z'),
         ]);
     }

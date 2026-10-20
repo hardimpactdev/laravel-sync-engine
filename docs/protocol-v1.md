@@ -63,6 +63,7 @@ A **Change**:
 | `base_seq`    | int or null          | The row's `change_seq` the user last saw. Advisory.           |
 | `depends_on`  | string[], optional   | File ids that were uploaded first.                            |
 | `merge`       | bool, optional       | Account merge: match by content before inserting (§5.4).      |
+| `position`    | int, optional        | The change's place in this install's outbox. It only grows.   |
 | `client_time` | ISO 8601             | Display and logs only. Never used to order or resolve.        |
 
 ### 3.2 Processing
@@ -92,6 +93,7 @@ phone resends the same batch. Receipts make that safe.
     "changes": [],
     "cursor": "opaque",
     "has_more": false,
+    "last_position": 0,
     "server_time": "2026-10-20T09:58:14Z"
 }
 ```
@@ -121,6 +123,11 @@ A pulled **change**:
 | `seq`    | int                  |                                          |
 | `op`     | `upsert` or `delete` |                                          |
 | `row`    | object, for `upsert` | The full current row, as the entity spec serializes it. |
+
+`last_position` is the highest `position` of this `client_id` the server has
+applied or rejected. A phone that still has an unacked change at or below it
+does not apply the page: it sends the change again, gets its ack from the
+receipt, and pulls again. So a lost answer cannot count a delta twice.
 
 Pulled changes are ordered by `seq`. Each row appears once per page, with its
 latest version.
