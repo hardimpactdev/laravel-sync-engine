@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace HardImpact\HouseholdSync\Tests\Fixtures;
+
+use HardImpact\HouseholdSync\Concerns\SyncsToDevices;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+final class Item extends Model
+{
+    use SoftDeletes;
+    use SyncsToDevices;
+
+    protected $guarded = [];
+
+    /** @return BelongsTo<Room, $this> */
+    public function room(): BelongsTo
+    {
+        return $this->belongsTo(Room::class);
+    }
+
+    /** @return list<string> */
+    public function syncIgnoredAttributes(): array
+    {
+        return ['views'];
+    }
+}
