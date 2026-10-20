@@ -11,7 +11,7 @@ import {
     type TakeBatchOptions,
 } from "./sync";
 
-// One sync run for one household (protocol §3): push the next batch of the
+// One sync run for one scope (protocol §3): push the next batch of the
 // outbox, apply the acks, then pull pages until the feed is drained. The app
 // supplies the transport, so authentication and the base URL stay in the app.
 
@@ -42,7 +42,7 @@ export type SyncOutcome =
     | { status: "retry"; retryAfterMs: number | null }
     /** The server speaks a newer protocol. Local edits stay queued. */
     | { status: "upgrade_required" }
-    /** The user cannot read this household any more. Its local data is gone. */
+    /** The user cannot read this scope any more. Its local data is gone. */
     | { status: "gone"; lostChanges: number }
     /** Authentication failed. The app decides what to do with the session. */
     | { status: "unauthorized"; httpStatus: number }
@@ -51,8 +51,8 @@ export type SyncOutcome =
 
 export type SyncClientOptions = {
     store: LocalStore;
-    /** The household's id in the local rows. */
-    householdId: string;
+    /** The scope's id in the local rows. */
+    scopeId: string;
     clientId: string;
     /** The entities this app version knows. */
     entities: readonly string[];
@@ -69,10 +69,10 @@ export type SyncClient = {
     sync(): Promise<SyncOutcome>;
 };
 
-const resyncKey = (householdId: string) => `sync.resync.${householdId}`;
+const resyncKey = (scopeId: string) => `sync.resync.${scopeId}`;
 
 export function createSyncClient(options: SyncClientOptions): SyncClient {
-    const { store, householdId } = options;
+    const { store, scopeId } = options;
     const engine = engineOf(store);
     let running: Promise<SyncOutcome> | null = null;
     let again = false;
@@ -83,12 +83,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         let seen = resyncing() ? new Set<string>() : null;
 
         for (let request = 0; request < (options.maxRequests ?? 25); request++) {
-            const batch = takeBatch(store, householdId, { isUploaded: options.isUploaded });
+            const batch = takeBatch(store, scopeId, { isUploaded: options.isUploaded });
             const ids = batch.map((change) => change.change_id);
             const body: SyncRequestBody = {
                 protocol: 1,
                 client_id: options.clientId,
-                cursor: seen && !seenStarted(seen) ? null : cursorOf(store, householdId),
+                cursor: seen && !seenStarted(seen) ? null : cursorOf(store, scopeId),
                 entities: [...options.entities],
                 changes: batch,
             };
@@ -97,7 +97,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             try {
                 result = await options.transport(body);
             } catch {
-                if (ids.length) returnToPending(store, householdId, ids);
+                if (ids.length) returnToPending(store, scopeId, ids);
                 return { status: "offline" };
             }
 
@@ -113,20 +113,20 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
             const response = result.body as PullPage & { acks: Ack[]; last_position?: number };
             if (ids.length) {
-                const acks = applyAcks(store, householdId, response.acks);
+                const acks = applyAcks(store, scopeId, response.acks);
                 const answered = new Set(response.acks.map((ack) => ack.change_id));
                 const unanswered = ids.filter((id) => !answered.has(id));
-                if (unanswered.length) returnToPending(store, householdId, unanswered);
+                if (unanswered.length) returnToPending(store, scopeId, unanswered);
                 if (acks.rejected.length) options.onRejected?.(acks.rejected);
                 pushed += ids.length - unanswered.length;
             }
 
-            // The server saw changes whose acks this phone has not got, for example
+            // The server saw changes whose acks this device has not got, for example
             // after a lost answer. Their effect may already be in this page, so
             // send them again first; the receipts answer them, then pull again.
             if (typeof response.last_position === "number" && hasUnackedThrough(response.last_position)) continue;
 
-            const page = applyPullPage(store, householdId, response);
+            const page = applyPullPage(store, scopeId, response);
             if (page.deletedElsewhere.length) options.onDeletedElsewhere?.(page.deletedElsewhere);
             pulled += response.changes.length;
             if (seen) {
@@ -153,7 +153,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         ids: string[],
     ): SyncOutcome | { status: "resync" } | null {
         if (result.status === 200 && isResponse(result.body)) return null;
-        if (ids.length) returnToPending(store, householdId, ids);
+        if (ids.length) returnToPending(store, scopeId, ids);
         const code = errorCode(result.body);
         switch (true) {
             case result.status === 200:
@@ -179,8 +179,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     function hasSendable(): boolean {
         return (
             (engine.db.get<{ count: number }>(
-                "SELECT COUNT(*) AS count FROM sync_outbox WHERE household_id = ? AND state = 'pending'",
-                [householdId],
+                "SELECT COUNT(*) AS count FROM sync_outbox WHERE scope_id = ? AND state = 'pending'",
+                [scopeId],
             )?.count ?? 0) > 0
         );
     }
@@ -188,15 +188,15 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     function hasUnackedThrough(position: number): boolean {
         return (
             (engine.db.get<{ count: number }>(
-                "SELECT COUNT(*) AS count FROM sync_outbox WHERE household_id = ? AND position <= ?",
-                [householdId, position],
+                "SELECT COUNT(*) AS count FROM sync_outbox WHERE scope_id = ? AND position <= ?",
+                [scopeId, position],
             )?.count ?? 0) > 0
         );
     }
 
     function resyncing(): boolean {
         return (
-            engine.db.get<{ value: string }>("SELECT value FROM local_meta WHERE key = ?", [resyncKey(householdId)])
+            engine.db.get<{ value: string }>("SELECT value FROM local_meta WHERE key = ?", [resyncKey(scopeId)])
                 ?.value === "1"
         );
     }
@@ -205,10 +205,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         if (on) {
             engine.db.run(
                 "INSERT INTO local_meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = '1'",
-                [resyncKey(householdId)],
+                [resyncKey(scopeId)],
             );
         } else {
-            engine.db.run("DELETE FROM local_meta WHERE key = ?", [resyncKey(householdId)]);
+            engine.db.run("DELETE FROM local_meta WHERE key = ?", [resyncKey(scopeId)]);
         }
     }
 
@@ -216,7 +216,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     function sweep(seen: Set<string>) {
         store.transaction(() => {
             for (const table of engine.specs.keys()) {
-                for (const row of rowsOfHousehold(table)) {
+                for (const row of rowsOfScope(table)) {
                     const id = row.sync_id as string;
                     if (seen.has(`${table}:${id}`)) continue;
                     if (engine.entriesFor(table, id).length) continue;
@@ -227,34 +227,34 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         });
     }
 
-    /** Removes everything of the household. Returns how many queued changes were lost. */
+    /** Removes everything of the scope. Returns how many queued changes were lost. */
     function purge(): number {
         return store.transaction(() => {
             const lost =
                 engine.db.get<{ count: number }>(
-                    "SELECT COUNT(*) AS count FROM sync_outbox WHERE household_id = ?",
-                    [householdId],
+                    "SELECT COUNT(*) AS count FROM sync_outbox WHERE scope_id = ?",
+                    [scopeId],
                 )?.count ?? 0;
             for (const table of engine.specs.keys()) {
-                for (const row of rowsOfHousehold(table)) engine.deleteRow(table, row.sync_id as string);
+                for (const row of rowsOfScope(table)) engine.deleteRow(table, row.sync_id as string);
             }
-            engine.db.run("DELETE FROM sync_outbox WHERE household_id = ?", [householdId]);
-            engine.db.run("DELETE FROM sync_rejected WHERE household_id = ?", [householdId]);
-            engine.db.run("DELETE FROM sync_state WHERE household_id = ?", [householdId]);
+            engine.db.run("DELETE FROM sync_outbox WHERE scope_id = ?", [scopeId]);
+            engine.db.run("DELETE FROM sync_rejected WHERE scope_id = ?", [scopeId]);
+            engine.db.run("DELETE FROM sync_state WHERE scope_id = ?", [scopeId]);
             setResync(false);
             for (const table of ["sync_outbox", "sync_rejected", "sync_state"]) engine.touch(table);
             return lost;
         });
     }
 
-    function rowsOfHousehold(table: string): Row[] {
-        if (engine.columns(table).has("household_id")) {
-            return engine.db.all<Row>(`SELECT * FROM ${table} WHERE household_id = ?`, [householdId]);
+    function rowsOfScope(table: string): Row[] {
+        if (engine.columns(table).has("scope_id")) {
+            return engine.db.all<Row>(`SELECT * FROM ${table} WHERE scope_id = ?`, [scopeId]);
         }
         const spec = engine.spec(table);
         return engine.db
             .all<Row>(`SELECT * FROM ${table}`)
-            .filter((row) => spec.household(row, engine.db) === householdId);
+            .filter((row) => spec.scope(row, engine.db) === scopeId);
     }
 
     return {

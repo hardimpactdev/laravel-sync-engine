@@ -9,7 +9,7 @@ import {
     returnToPending,
     takeBatch,
 } from "../src/sync.ts";
-import { fixture, household, outbox, pulled, setup, type Store } from "./setup.ts";
+import { fixture, scope, outbox, pulled, setup, type Store } from "./setup.ts";
 
 const item = "01JBC59ZQ0B2D4F6H8K0M2P4R6";
 const milk = "01JBC5A3X5G9J1L3N5Q7S9V1X4";
@@ -35,7 +35,7 @@ function fixturePhone() {
         ids: ["01JBC5A2W4F8H0K2M4P6R8T0V2", "01JBC5A3X5G9J1L3N5Q7S9V1X3", "01JBC5A4Y6H0K2M4P6R8T0V2X4"],
     });
     const { store, at } = phone;
-    applyPullPage(store, household, {
+    applyPullPage(store, scope, {
         changes: [
             { entity: "rooms", id: hall, seq: 4100, op: "upsert", row: { name: "Hall" } },
             { entity: "rooms", id: kitchen, seq: 4101, op: "upsert", row: { name: "Kitchen" } },
@@ -55,7 +55,7 @@ function fixturePhone() {
     store.update("items", item, { name: "Dishwasher", room_id: kitchen }, { dependsOn: [] });
     at("2026-10-20T09:58:13.019Z");
     store.operate("counters", milk, "adjust", { name: "Milk", delta: 1 }, (local) =>
-        local.put("counters", milk, { household_id: household, name: "Milk" }),
+        local.put("counters", milk, { scope_id: scope, name: "Milk" }),
     );
     at("2026-10-20T09:58:14.502Z");
     store.remove("rooms", hall);
@@ -67,9 +67,9 @@ test("the outbox becomes the push request of the fixture", () => {
     const request: PushRequest = {
         protocol: 1,
         client_id: "01JBC4Y0R8T5D8M4QKX3N2V6ZA",
-        cursor: cursorOf(store, household),
+        cursor: cursorOf(store, scope),
         entities: ["items", "rooms", "counters"],
-        changes: takeBatch(store, household),
+        changes: takeBatch(store, scope),
     };
     assert.deepEqual(request, fixture<PushRequest>("push-request.json"));
     assert.deepEqual(
@@ -84,11 +84,11 @@ test("the outbox becomes the push request of the fixture", () => {
 
 test("the push response of the fixture clears the outbox and lands the server rows", () => {
     const { store } = fixturePhone();
-    takeBatch(store, household);
+    takeBatch(store, scope);
     const response = fixture<SyncResponse>("push-response.json");
 
-    const acks = applyAcks(store, household, response.acks);
-    applyPullPage(store, household, response);
+    const acks = applyAcks(store, scope, response.acks);
+    applyPullPage(store, scope, response);
 
     assert.deepEqual(acks, {
         applied: response.acks.map((ack) => ack.change_id),
@@ -104,7 +104,7 @@ test("the push response of the fixture clears the outbox and lands the server ro
     assert.equal(dishwasher?.name, "Dishwasher");
     assert.equal(dishwasher?.room_id, kitchen);
     assert.equal(dishwasher?.server_seq, 4190);
-    assert.equal(cursorOf(store, household), "opaque-cursor-2");
+    assert.equal(cursorOf(store, scope), "opaque-cursor-2");
     assert.equal(
         store.get<{ snapshot_complete: number }>("SELECT snapshot_complete FROM sync_state")
             ?.snapshot_complete,
@@ -116,11 +116,11 @@ test("a rejected change keeps its values and the row returns to the server's ver
     const { store } = setup({ ids: ["01JBC5A2W4F8H0K2M4P6R8T0V2"] });
     pulled(store, "items", item, { name: "Dishwasher", room_id: kitchen, notes: null }, 4182);
     store.update("items", item, { name: "" });
-    takeBatch(store, household);
+    takeBatch(store, scope);
     store.update("items", item, { notes: "Keep the manual" });
 
     const rejected = fixture<Ack>("rejected-ack.json");
-    const result = applyAcks(store, household, [rejected]);
+    const result = applyAcks(store, scope, [rejected]);
 
     assert.deepEqual(result.rejected, [
         {
@@ -150,11 +150,11 @@ test("a rejected change keeps its values and the row returns to the server's ver
 
 test("a rejected insert with no server row removes the row and keeps later edits", () => {
     const { store } = setup();
-    const lamp = store.insert("items", { household_id: household, name: "Lamp" });
-    const [insert] = takeBatch(store, household);
+    const lamp = store.insert("items", { scope_id: scope, name: "Lamp" });
+    const [insert] = takeBatch(store, scope);
     store.update("items", lamp, { notes: "Blue" });
 
-    const result = applyAcks(store, household, [
+    const result = applyAcks(store, scope, [
         {
             change_id: insert.change_id,
             status: "rejected",
@@ -176,12 +176,12 @@ test("a rejected operation takes its delta back off the other row", () => {
     pulled(store, "stock", "RICE", { name: "Rice", quantity: "2.000" }, 7);
     const movement = store.newId();
     store.operate("movements", movement, "record", { stock_id: "RICE", delta: "-0.500" }, (local) =>
-        local.put("movements", movement, { household_id: household, stock_id: "RICE", delta: "-0.500" }),
+        local.put("movements", movement, { scope_id: scope, stock_id: "RICE", delta: "-0.500" }),
     );
     assert.equal(row(store, "stock", "RICE")?.quantity, "1.500");
-    const [change] = takeBatch(store, household);
+    const [change] = takeBatch(store, scope);
 
-    applyAcks(store, household, [
+    applyAcks(store, scope, [
         {
             change_id: change.change_id,
             status: "rejected",
@@ -197,8 +197,8 @@ test("a rejected delete brings the row back", () => {
     const { store } = setup();
     pulled(store, "rooms", hall, { name: "Hall" }, 4100);
     store.remove("rooms", hall);
-    const [change] = takeBatch(store, household);
-    applyAcks(store, household, [
+    const [change] = takeBatch(store, scope);
+    applyAcks(store, scope, [
         {
             change_id: change.change_id,
             status: "rejected",
@@ -213,8 +213,8 @@ test("an acked delete removes the hidden row, and an unknown ack changes nothing
     const { store } = setup();
     pulled(store, "rooms", hall, { name: "Hall" }, 4100);
     store.remove("rooms", hall);
-    const [change] = takeBatch(store, household);
-    applyAcks(store, household, [
+    const [change] = takeBatch(store, scope);
+    applyAcks(store, scope, [
         { change_id: "01JBC5A2W4F8H0K2M4P6R8T0ZZ", status: "applied", seq: 1 },
         { change_id: change.change_id, status: "duplicate", seq: 4200 },
     ]);
@@ -224,9 +224,9 @@ test("an acked delete removes the hidden row, and an unknown ack changes nothing
 
 test("an acked insert makes the row known, so its delete is sent", () => {
     const { store } = setup();
-    const lamp = store.insert("items", { household_id: household, name: "Lamp" });
-    const [change] = takeBatch(store, household);
-    applyAcks(store, household, [{ change_id: change.change_id, status: "applied", seq: 12 }]);
+    const lamp = store.insert("items", { scope_id: scope, name: "Lamp" });
+    const [change] = takeBatch(store, scope);
+    applyAcks(store, scope, [{ change_id: change.change_id, status: "applied", seq: 12 }]);
     store.remove("items", lamp);
     assert.deepEqual(
         outbox(store).map((entry) => [entry.op, entry.base_seq]),
@@ -236,12 +236,12 @@ test("an acked insert makes the row known, so its delete is sent", () => {
 
 test("a remap rewrites references in the tables and in unsent changes", () => {
     const { store } = setup();
-    const attic = store.insert("rooms", { household_id: household, name: "Attic" });
-    const [roomChange] = takeBatch(store, household);
-    const lamp = store.insert("items", { household_id: household, name: "Lamp", room_id: attic });
+    const attic = store.insert("rooms", { scope_id: scope, name: "Attic" });
+    const [roomChange] = takeBatch(store, scope);
+    const lamp = store.insert("items", { scope_id: scope, name: "Lamp", room_id: attic });
     const lampEntry = outbox(store)[1];
 
-    applyAcks(store, household, [
+    applyAcks(store, scope, [
         {
             change_id: roomChange.change_id,
             status: "applied",
@@ -258,11 +258,11 @@ test("a remap rewrites references in the tables and in unsent changes", () => {
 test("a remap onto a row the phone has merges the two and leaves sent changes as they are", () => {
     const { store } = setup();
     pulled(store, "rooms", "SERVER-ATTIC", { name: "Attic" }, 5);
-    const attic = store.insert("rooms", { household_id: household, name: "attic" });
-    const lamp = store.insert("items", { household_id: household, name: "Lamp", room_id: attic });
-    const [roomChange] = takeBatch(store, household);
+    const attic = store.insert("rooms", { scope_id: scope, name: "attic" });
+    const lamp = store.insert("items", { scope_id: scope, name: "Lamp", room_id: attic });
+    const [roomChange] = takeBatch(store, scope);
 
-    applyAcks(store, household, [
+    applyAcks(store, scope, [
         { change_id: roomChange.change_id, status: "applied", seq: 6, remap: { from: attic, to: "SERVER-ATTIC" } },
     ]);
     assert.equal(row(store, "rooms", attic), null);
@@ -283,12 +283,12 @@ test("a pull keeps pending fields, adds pending deltas and keeps pending deletes
     store.operate("counters", milk, "adjust", { delta: 1 });
     const movement = store.newId();
     store.operate("movements", movement, "record", { stock_id: "RICE", delta: "0.500" }, (local) =>
-        local.put("movements", movement, { household_id: household, stock_id: "RICE", delta: "0.500" }),
+        local.put("movements", movement, { scope_id: scope, stock_id: "RICE", delta: "0.500" }),
     );
     store.remove("rooms", hall);
-    takeBatch(store, household, { limit: 1 }); // a sent change is still pending until acked
+    takeBatch(store, scope, { limit: 1 }); // a sent change is still pending until acked
 
-    applyPullPage(store, household, {
+    applyPullPage(store, scope, {
         changes: [
             { entity: "items", id: item, seq: 10, op: "upsert", row: { name: "Dish washer", notes: "Theirs" } },
             { entity: "counters", id: milk, seq: 11, op: "upsert", row: { name: "Milk", quantity: 5 } },
@@ -307,7 +307,7 @@ test("a pull keeps pending fields, adds pending deltas and keeps pending deletes
     assert.equal(row(store, "rooms", hall)?.name, "Big hall");
     assert.ok(row(store, "rooms", hall)?.deleted_at);
     assert.equal(outbox(store).length, 4);
-    assert.equal(cursorOf(store, household), "c2");
+    assert.equal(cursorOf(store, scope), "c2");
 });
 
 test("a pulled tombstone deletes the row and drops its pending changes", () => {
@@ -316,7 +316,7 @@ test("a pulled tombstone deletes the row and drops its pending changes", () => {
     pulled(store, "rooms", hall, { name: "Hall" }, 2);
     store.update("items", item, { notes: "Mine" });
 
-    const result = applyPullPage(store, household, {
+    const result = applyPullPage(store, scope, {
         changes: [
             { entity: "items", id: item, seq: 3, op: "delete" },
             { entity: "rooms", id: hall, seq: 4, op: "delete" },
@@ -329,7 +329,7 @@ test("a pulled tombstone deletes the row and drops its pending changes", () => {
     assert.equal(row(store, "items", item), null);
     assert.equal(row(store, "rooms", hall), null);
     assert.deepEqual(outbox(store), []);
-    assert.equal(cursorOf(store, household), "c3");
+    assert.equal(cursorOf(store, scope), "c3");
 });
 
 test("a pull skips a version older than the one the phone has", () => {
@@ -341,9 +341,9 @@ test("a pull skips a version older than the one the phone has", () => {
 
 test("a page and its cursor land together or not at all", () => {
     const { store } = setup();
-    applyPullPage(store, household, { changes: [], cursor: "c1", has_more: false });
+    applyPullPage(store, scope, { changes: [], cursor: "c1", has_more: false });
     assert.throws(() =>
-        applyPullPage(store, household, {
+        applyPullPage(store, scope, {
             changes: [
                 { entity: "rooms", id: hall, seq: 2, op: "upsert", row: { name: "Hall" } },
                 { entity: "rooms", id: "BROKEN", seq: 3, op: "upsert", row: { name: null } },
@@ -352,7 +352,7 @@ test("a page and its cursor land together or not at all", () => {
             has_more: false,
         }),
     );
-    assert.equal(cursorOf(store, household), "c1");
+    assert.equal(cursorOf(store, scope), "c1");
     assert.equal(row(store, "rooms", hall), null);
 });
 
@@ -360,36 +360,36 @@ test("a batch holds at most 100 changes in outbox order", () => {
     const { store } = setup();
     store.transaction(() => {
         for (let index = 0; index < 105; index++) {
-            store.insert("rooms", { household_id: household, name: `Room ${index}` });
+            store.insert("rooms", { scope_id: scope, name: `Room ${index}` });
         }
     });
-    const batch = takeBatch(store, household, { limit: 500 });
+    const batch = takeBatch(store, scope, { limit: 500 });
     assert.equal(batch.length, 100);
     assert.equal(batch[99].fields?.name, "Room 99");
 });
 
 test("changes wait for their files, and so do later changes to that row and rows pointing at it", () => {
     const { store } = setup();
-    const attic = store.insert("rooms", { household_id: household, name: "Attic" }, { dependsOn: ["photo-1"] });
+    const attic = store.insert("rooms", { scope_id: scope, name: "Attic" }, { dependsOn: ["photo-1"] });
     store.update("rooms", attic, { name: "Loft" });
-    const hallway = store.insert("rooms", { household_id: household, name: "Hallway" });
-    store.insert("items", { household_id: household, name: "Lamp", room_id: attic });
-    store.insert("items", { household_id: household, name: "Rug", room_id: hallway });
+    const hallway = store.insert("rooms", { scope_id: scope, name: "Hallway" });
+    store.insert("items", { scope_id: scope, name: "Lamp", room_id: attic });
+    store.insert("items", { scope_id: scope, name: "Rug", room_id: hallway });
 
     const uploaded = new Set<string>();
-    const first = takeBatch(store, household, { isUploaded: (file) => uploaded.has(file) });
+    const first = takeBatch(store, scope, { isUploaded: (file) => uploaded.has(file) });
     assert.deepEqual(
         first.map((change) => change.fields?.name),
         ["Hallway", "Rug"],
     );
     applyAcks(
         store,
-        household,
+        scope,
         first.map((change) => ({ change_id: change.change_id, status: "applied" as const, seq: 1 })),
     );
 
     uploaded.add("photo-1");
-    const second = takeBatch(store, household, { isUploaded: (file) => uploaded.has(file) });
+    const second = takeBatch(store, scope, { isUploaded: (file) => uploaded.has(file) });
     assert.deepEqual(
         second.map((change) => [change.fields?.name, change.depends_on]),
         [
@@ -401,16 +401,16 @@ test("changes wait for their files, and so do later changes to that row and rows
 
 test("a batch still marked sending is sent again with the same change ids", () => {
     const { store } = setup();
-    store.insert("rooms", { household_id: household, name: "Attic" });
-    const first = takeBatch(store, household);
-    store.insert("rooms", { household_id: household, name: "Cellar" });
-    const again = takeBatch(store, household);
+    store.insert("rooms", { scope_id: scope, name: "Attic" });
+    const first = takeBatch(store, scope);
+    store.insert("rooms", { scope_id: scope, name: "Cellar" });
+    const again = takeBatch(store, scope);
     assert.deepEqual(again, first);
     assert.equal(outbox(store)[0].attempts, 2);
 
-    returnToPending(store, household, [first[0].change_id]);
+    returnToPending(store, scope, [first[0].change_id]);
     assert.deepEqual(
-        takeBatch(store, household).map((change) => change.fields?.name),
+        takeBatch(store, scope).map((change) => change.fields?.name),
         ["Attic", "Cellar"],
     );
 });

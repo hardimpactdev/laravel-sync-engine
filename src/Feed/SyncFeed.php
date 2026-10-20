@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Feed;
+namespace HardImpact\SyncEngine\Feed;
 
-use HardImpact\HouseholdSync\Config;
-use HardImpact\HouseholdSync\SyncEntities;
-use HardImpact\HouseholdSync\Tombstones;
+use HardImpact\SyncEngine\Config;
+use HardImpact\SyncEngine\SyncEntities;
+use HardImpact\SyncEngine\Tombstones;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Reads the household's changes after a seq, across entities and tombstones,
+ * Reads the scope's changes after a seq, across entities and tombstones,
  * in seq order. Each live row carries only its latest seq, so a row appears
  * once per page.
  */
@@ -20,13 +20,13 @@ final readonly class SyncFeed
     public function __construct(private SyncEntities $entities) {}
 
     /** @param list<string> $entityNames */
-    public function page(int $householdId, array $entityNames, int $afterSeq, int $limit): FeedPage
+    public function page(int $scopeId, array $entityNames, int $afterSeq, int $limit): FeedPage
     {
         $changes = [];
 
         foreach ($entityNames as $name) {
             $entity = $this->entities->get($name);
-            $query = $entity->query($householdId);
+            $query = $entity->query($scopeId);
             $column = $query->getModel()->qualifyColumn('change_seq');
 
             $query->where($column, '>', $afterSeq)->orderBy($column)->limit($limit + 1)
@@ -45,7 +45,7 @@ final readonly class SyncFeed
         // A first pull has nothing to delete.
         if ($afterSeq > 0 && $entityNames !== []) {
             DB::table(Tombstones::table())
-                ->where('household_id', $householdId)
+                ->where('scope_id', $scopeId)
                 ->whereIn('entity', $entityNames)
                 ->where('change_seq', '>', $afterSeq)
                 ->orderBy('change_seq')

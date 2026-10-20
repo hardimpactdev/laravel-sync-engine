@@ -61,7 +61,7 @@ export interface LocalStore<T extends string = string> {
 export type OutboxEntry = {
     position: number;
     change_id: string;
-    household_id: string;
+    scope_id: string;
     entity: string;
     row_id: string;
     op: string;
@@ -83,7 +83,7 @@ export class MissingRowError extends Error {
 /** Columns every synced row has. The store and sync set them; a caller never does. */
 const conventions = new Set([
     "sync_id",
-    "household_id",
+    "scope_id",
     "server_id",
     "server_seq",
     "created_at",
@@ -99,7 +99,7 @@ type Spec = {
     references: Map<string, string>;
     operations: Map<string, { counters: readonly CounterSpec[]; references: Map<string, string> }>;
     counterFields: Set<string>;
-    household: NonNullable<EntitySpec["household"]>;
+    scope: NonNullable<EntitySpec["scope"]>;
 };
 
 /** A counter of one queued operation that lands on a row. */
@@ -315,7 +315,7 @@ function createEngine<T extends string>(
         const synced: Row = {};
         for (const [column, value] of Object.entries(values)) {
             if (!plainName.test(column)) throw new Error(`${column} is not a column name.`);
-            if (column === "household_id" && mode === "insert") continue;
+            if (column === "scope_id" && mode === "insert") continue;
             if (conventions.has(column)) throw new Error(`The store sets ${column} itself.`);
             if (column.startsWith("local_")) continue;
             if (entity.serverOwned.has(column)) {
@@ -334,12 +334,12 @@ function createEngine<T extends string>(
         return synced;
     }
 
-    function householdOf(entity: Spec, values: Row): string {
-        const household = entity.household(values, db);
-        if (!household) {
-            throw new Error(`The ${entity.name} row ${values.sync_id} has no household.`);
+    function scopeOf(entity: Spec, values: Row): string {
+        const scope = entity.scope(values, db);
+        if (!scope) {
+            throw new Error(`The ${entity.name} row ${values.sync_id} has no scope.`);
         }
-        return household;
+        return scope;
     }
 
     function entriesFor(entity: string, rowId: string): OutboxEntry[] {
@@ -367,10 +367,10 @@ function createEngine<T extends string>(
     ): OutboxEntry {
         const changeId = newId();
         db.run(
-            "INSERT INTO sync_outbox (change_id, household_id, entity, row_id, op, payload, base_seq, depends_on, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sync_outbox (change_id, scope_id, entity, row_id, op, payload, base_seq, depends_on, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 changeId,
-                householdOf(entity, values),
+                scopeOf(entity, values),
                 entity.name,
                 String(values.sync_id),
                 op,
@@ -525,13 +525,13 @@ function createEngine<T extends string>(
         entity: string,
         syncId: string,
         server: Row,
-        { seq, householdId }: { seq?: number; householdId: string },
+        { seq, scopeId }: { seq?: number; scopeId: string },
     ) {
         const known = columns(entity);
         const values: Row = {};
         for (const [column, value] of Object.entries(server)) {
             if (!known.has(column) || column.startsWith("local_")) continue;
-            if (["sync_id", "household_id", "server_seq", "deleted_at"].includes(column)) continue;
+            if (["sync_id", "scope_id", "server_seq", "deleted_at"].includes(column)) continue;
             values[column] = value;
         }
         let hidden = false;
@@ -559,7 +559,7 @@ function createEngine<T extends string>(
         } else {
             values.created_at ??= stamp;
             values.deleted_at = hidden ? stamp : null;
-            if (known.has("household_id")) values.household_id = householdId;
+            if (known.has("scope_id")) values.scope_id = scopeId;
             const names = ["sync_id", ...Object.keys(values)];
             db.run(
                 `INSERT INTO ${entity} (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})`,
@@ -570,8 +570,8 @@ function createEngine<T extends string>(
     }
 
     /**
-     * The server matched a phone row to one of its own. Every reference to the
-     * phone id, in the tables and in unsent outbox entries, moves to the server id.
+     * The server matched a device row to one of its own. Every reference to the
+     * device id, in the tables and in unsent outbox entries, moves to the server id.
      * Entries the server may have seen keep their payload, so a resend stays the same.
      */
     function remap(entity: string, from: string, to: string) {
@@ -600,17 +600,17 @@ function createEngine<T extends string>(
                 );
                 if (changes > 0) touch(source.name);
             }
-            // Ids are unique, so a household id in any table can only be this household.
-            if (columns(source.name).has("household_id")) {
+            // Ids are unique, so a scope id in any table can only be this scope.
+            if (columns(source.name).has("scope_id")) {
                 const { changes } = db.run(
-                    `UPDATE ${source.name} SET household_id = ? WHERE household_id = ?`,
+                    `UPDATE ${source.name} SET scope_id = ? WHERE scope_id = ?`,
                     [to, from],
                 );
                 if (changes > 0) touch(source.name);
             }
         }
         for (const table of ["sync_outbox", "sync_rejected", "sync_state"]) {
-            db.run(`UPDATE OR IGNORE ${table} SET household_id = ? WHERE household_id = ?`, [to, from]);
+            db.run(`UPDATE OR IGNORE ${table} SET scope_id = ? WHERE scope_id = ?`, [to, from]);
         }
         db.run("UPDATE sync_rejected SET row_id = ? WHERE entity = ? AND row_id = ?", [
             to,
@@ -650,7 +650,7 @@ function createEngine<T extends string>(
             spec(table);
             for (const column of Object.keys(values)) {
                 if (!plainName.test(column)) throw new Error(`${column} is not a column name.`);
-                if (conventions.has(column) && column !== "household_id") {
+                if (conventions.has(column) && column !== "scope_id") {
                     throw new Error(`The store sets ${column} itself.`);
                 }
             }
@@ -728,9 +728,9 @@ function resolveSpecs(
             references: new Map(Object.entries(entity.references ?? {})),
             operations,
             counterFields: new Set(),
-            household:
-                entity.household ??
-                ((values) => (typeof values.household_id === "string" ? values.household_id : null)),
+            scope:
+                entity.scope ??
+                ((values) => (typeof values.scope_id === "string" ? values.scope_id : null)),
         });
     }
     for (const [table, entity] of specs) {

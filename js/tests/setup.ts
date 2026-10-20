@@ -10,7 +10,7 @@ import { memoryDatabase } from "./memory-database.ts";
 
 const row = `
     sync_id TEXT PRIMARY KEY NOT NULL,
-    household_id TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
     server_id INTEGER UNIQUE,
     server_seq INTEGER,
     created_at TEXT NOT NULL,
@@ -20,7 +20,7 @@ const row = `
 export const testMigrations = [
     syncEngineSchemaV1,
     `
-    CREATE TABLE households (
+    CREATE TABLE scopes (
         sync_id TEXT PRIMARY KEY NOT NULL,
         server_id INTEGER UNIQUE,
         server_seq INTEGER,
@@ -43,10 +43,10 @@ export const testMigrations = [
     `,
 ];
 
-export const tables = ["households", "rooms", "items", "counters", "stock", "movements"] as const;
+export const tables = ["scopes", "rooms", "items", "counters", "stock", "movements"] as const;
 export type Table = (typeof tables)[number];
 
-export const household = "01J9XX0A1B2C3D4E5F6G7H8J9K";
+export const scope = "01J9XX0A1B2C3D4E5F6G7H8J9K";
 
 /** A store on a fresh database. `ids` come first from newId; `at` fixes the clock. */
 export function setup({ ids = [] }: { ids?: string[] } = {}) {
@@ -59,7 +59,7 @@ export function setup({ ids = [] }: { ids?: string[] } = {}) {
     const store = createLocalStore(db, {
         tables,
         entities: {
-            households: { household: (values) => values.sync_id as string },
+            scopes: { scope: (values) => values.sync_id as string },
             items: { references: { room_id: "rooms" }, serverOwned: ["illustration"] },
             counters: { operations: { adjust: { counters: [{ field: "quantity", delta: "delta" }] } } },
             movements: {
@@ -75,8 +75,8 @@ export function setup({ ids = [] }: { ids?: string[] } = {}) {
         now: () => fixed ?? new Date(Date.UTC(2026, 9, 20, 9, 0, clock++)).toISOString(),
     });
     db.run(
-        "INSERT INTO households (sync_id, name, server_seq, created_at, updated_at) VALUES (?, 'Home', 1, 'x', 'x')",
-        [household],
+        "INSERT INTO scopes (sync_id, name, server_seq, created_at, updated_at) VALUES (?, 'Home', 1, 'x', 'x')",
+        [scope],
     );
     const at = (time: string) => {
         fixed = time;
@@ -110,7 +110,7 @@ export function fixture<T>(name: string): T {
 
 /** Writes a row as a pull brings it. */
 export function pulled(store: Store, entity: Table, id: string, row: Row, seq: number) {
-    applyPullPage(store, household, {
+    applyPullPage(store, scope, {
         changes: [{ entity, id, seq, op: "upsert", row }],
         cursor: `cursor-${seq}`,
         has_more: false,

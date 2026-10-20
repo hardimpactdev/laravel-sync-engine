@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Tests\Fixtures;
+namespace HardImpact\SyncEngine\Tests\Fixtures;
 
-use HardImpact\HouseholdSync\Push\SyncWrite;
-use HardImpact\HouseholdSync\SyncEntity;
+use HardImpact\SyncEngine\Push\SyncWrite;
+use HardImpact\SyncEngine\SyncEntity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
@@ -18,9 +18,9 @@ final class CounterEntity extends SyncEntity
         return 'counters';
     }
 
-    public function query(int $householdId): Builder
+    public function query(int $scopeId): Builder
     {
-        return Counter::query()->where('household_id', $householdId);
+        return Counter::query()->where('scope_id', $scopeId);
     }
 
     public function row(Model $model): array
@@ -41,7 +41,7 @@ final class CounterEntity extends SyncEntity
     {
         $name = is_string($write->args['name'] ?? null) ? $write->args['name'] : '';
         $delta = is_int($write->args['delta'] ?? null) ? $write->args['delta'] : 0;
-        $counter = Counter::query()->firstOrNew(['household_id' => $write->householdId, 'name' => $name]);
+        $counter = Counter::query()->firstOrNew(['scope_id' => $write->scopeId, 'name' => $name]);
 
         if (! $counter->exists) {
             $counter->sync_id = $write->syncId;

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync;
+namespace HardImpact\SyncEngine;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -13,25 +13,25 @@ use Illuminate\Support\Str;
  */
 final class Backfill
 {
-    public static function run(string $table, string $householdColumn = 'household_id', string $key = 'id'): void
+    public static function run(string $table, string $scopeColumn = 'scope_id', string $key = 'id'): void
     {
         DB::table($table)
             ->where(fn ($query) => $query->whereNull('sync_id')->orWhereNull('change_seq'))
             ->orderBy($key)
-            ->chunkById(500, function ($rows) use ($table, $householdColumn, $key): void {
-                DB::transaction(function () use ($rows, $table, $householdColumn, $key): void {
+            ->chunkById(500, function ($rows) use ($table, $scopeColumn, $key): void {
+                DB::transaction(function () use ($rows, $table, $scopeColumn, $key): void {
                     foreach ($rows as $row) {
                         /** @var array<string, mixed> $values */
                         $values = (array) $row;
-                        $householdId = $values[$householdColumn];
+                        $scopeId = $values[$scopeColumn];
 
-                        if (! is_numeric($householdId)) {
+                        if (! is_numeric($scopeId)) {
                             continue;
                         }
 
                         DB::table($table)->where($key, $values[$key])->update([
                             'sync_id' => $values['sync_id'] ?? (string) Str::ulid(),
-                            'change_seq' => HouseholdSyncSequence::next(DB::connection(), (int) $householdId),
+                            'change_seq' => SyncSequence::next(DB::connection(), (int) $scopeId),
                         ]);
                     }
                 });

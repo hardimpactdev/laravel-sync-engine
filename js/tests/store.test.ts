@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MissingRowError } from "../src/store.ts";
 import { returnToPending, takeBatch } from "../src/sync.ts";
-import { household, outbox, pulled, setup, type Store } from "./setup.ts";
+import { scope, outbox, pulled, setup, type Store } from "./setup.ts";
 
 function room(store: Store, name = "Kitchen") {
-    return store.insert("rooms", { household_id: household, name });
+    return store.insert("rooms", { scope_id: scope, name });
 }
 
 function stock(store: Store, id: string) {
@@ -17,7 +17,7 @@ test("a write changes the row and queues one merged upsert", () => {
     const { store } = setup();
     const kitchen = room(store);
     const item = store.insert("items", {
-        household_id: household,
+        scope_id: scope,
         name: "Dishwasher",
         local_photo_path: "photos/a.jpg",
     });
@@ -32,7 +32,7 @@ test("a write changes the row and queues one merged upsert", () => {
     assert.equal(row?.notes, "Left of the sink");
     assert.equal(row?.local_photo_path, "photos/b.jpg");
 
-    // Device-only columns and household_id never reach the payload. Later values win.
+    // Device-only columns and scope_id never reach the payload. Later values win.
     assert.deepEqual(outbox(store), [
         {
             entity: "rooms",
@@ -53,13 +53,13 @@ test("a write changes the row and queues one merged upsert", () => {
             base_seq: null,
         },
     ]);
-    const entry = store.get<{ household_id: string }>("SELECT household_id FROM sync_outbox");
-    assert.equal(entry?.household_id, household);
+    const entry = store.get<{ scope_id: string }>("SELECT scope_id FROM sync_outbox");
+    assert.equal(entry?.scope_id, scope);
 });
 
 test("a merge never moves a reference ahead of the row it points at", () => {
     const { store } = setup();
-    const item = store.insert("items", { household_id: household, name: "Lamp" });
+    const item = store.insert("items", { scope_id: scope, name: "Lamp" });
     const attic = room(store, "Attic");
     store.update("items", item, { room_id: attic });
     store.update("items", item, { notes: "Broken" });
@@ -76,7 +76,7 @@ test("a merge never moves a reference ahead of the row it points at", () => {
 
 test("an unsent insert and its delete cancel out", () => {
     const { store } = setup();
-    const item = store.insert("items", { household_id: household, name: "Kettle" });
+    const item = store.insert("items", { scope_id: scope, name: "Kettle" });
     store.update("items", item, { notes: "Old" });
     store.remove("items", item);
     assert.deepEqual(outbox(store), []);
@@ -109,8 +109,8 @@ test("a deleted or unknown row cannot change again", () => {
 
 test("a sent change is frozen, so later edits queue a new entry", () => {
     const { store } = setup();
-    const item = store.insert("items", { household_id: household, name: "Fridge" });
-    takeBatch(store, household);
+    const item = store.insert("items", { scope_id: scope, name: "Fridge" });
+    takeBatch(store, scope);
     store.update("items", item, { notes: "Humming" });
     assert.deepEqual(
         outbox(store).map((entry) => [entry.state, entry.payload]),
@@ -122,7 +122,7 @@ test("a sent change is frozen, so later edits queue a new entry", () => {
 
     // A failed send goes back to pending, but the server may have applied it,
     // so it keeps its payload and a delete still reaches the server.
-    returnToPending(store, household);
+    returnToPending(store, scope);
     store.update("items", item, { notes: "Quiet" });
     store.remove("items", item);
     assert.deepEqual(
@@ -137,34 +137,34 @@ test("a sent change is frozen, so later edits queue a new entry", () => {
 test("the store sets keys and timestamps itself and refuses fields it may not write", () => {
     const { store } = setup();
     assert.throws(
-        () => store.insert("rooms", { household_id: household, name: "Hall", sync_id: "X" }),
+        () => store.insert("rooms", { scope_id: scope, name: "Hall", sync_id: "X" }),
         /sets sync_id itself/,
     );
     assert.throws(
-        () => store.insert("rooms", { household_id: household, "name = 1; --": "Hall" }),
+        () => store.insert("rooms", { scope_id: scope, "name = 1; --": "Hall" }),
         /not a column name/,
     );
     assert.throws(() => store.insert("users" as never, { name: "Nick" }), /not a synced table/);
     assert.throws(
-        () => store.insert("items", { household_id: household, name: "Oven", illustration: "x" }),
+        () => store.insert("items", { scope_id: scope, name: "Oven", illustration: "x" }),
         /server sets items.illustration/,
     );
     assert.throws(
-        () => store.insert("counters", { household_id: household, name: "Milk", quantity: 3 }),
+        () => store.insert("counters", { scope_id: scope, name: "Milk", quantity: 3 }),
         /is a counter/,
     );
     assert.throws(
-        () => store.insert("movements", { household_id: household, delta: "1" }),
+        () => store.insert("movements", { scope_id: scope, delta: "1" }),
         /not a writable field/,
     );
     const hall = room(store, "Hall");
-    assert.throws(() => store.update("rooms", hall, { household_id: "OTHER" }), /sets household_id/);
+    assert.throws(() => store.update("rooms", hall, { scope_id: "OTHER" }), /sets scope_id/);
     assert.throws(() => store.operate("counters", hall, "reset", {}), /no operation reset/);
 });
 
 test("synced references have no foreign keys, so a child may arrive first", () => {
     const { store } = setup();
-    store.insert("items", { household_id: household, name: "Sofa", room_id: "NOT-YET-PULLED" });
+    store.insert("items", { scope_id: scope, name: "Sofa", room_id: "NOT-YET-PULLED" });
     assert.equal(store.all("SELECT * FROM items").length, 1);
 });
 
@@ -174,7 +174,7 @@ test("an operation changes its counters and is never merged", () => {
     const create = () =>
         store.operate("counters", milk, "adjust", { name: "Milk", delta: 1 }, (local) => {
             if (!local.get("SELECT 1 FROM counters WHERE sync_id = ?", [milk])) {
-                local.put("counters", milk, { household_id: household, name: "Milk" });
+                local.put("counters", milk, { scope_id: scope, name: "Milk" });
             }
         });
     create();
@@ -197,11 +197,11 @@ test("an operation changes its counters and is never merged", () => {
 
 test("an operation may change a total on another row, and its delete takes it back", () => {
     const { store } = setup();
-    const rice = store.insert("stock", { household_id: household, name: "Rice" });
+    const rice = store.insert("stock", { scope_id: scope, name: "Rice" });
     const record = (delta: string) => {
         const movement = store.newId();
         store.operate("movements", movement, "record", { stock_id: rice, delta }, (local) =>
-            local.put("movements", movement, { household_id: household, stock_id: rice, delta }),
+            local.put("movements", movement, { scope_id: scope, stock_id: rice, delta }),
         );
         return movement;
     };
@@ -261,7 +261,7 @@ test("listeners hear about their tables once per commit", () => {
 
     store.transaction(() => {
         room(store, "Garage");
-        store.insert("items", { household_id: household, name: "Bike" });
+        store.insert("items", { scope_id: scope, name: "Bike" });
     });
     assert.deepEqual(heard.sort(), ["inventory", "outbox"]);
     assert.notEqual(store.version(["rooms"]), before);
@@ -270,7 +270,7 @@ test("listeners hear about their tables once per commit", () => {
     room(store, "Shed");
     const milk = store.newId();
     store.operate("counters", milk, "adjust", { delta: 1 }, (local) =>
-        local.put("counters", milk, { household_id: household, name: "Milk" }),
+        local.put("counters", milk, { scope_id: scope, name: "Milk" }),
     );
     assert.deepEqual(heard.sort(), ["counters", "inventory", "outbox", "outbox", "outbox"]);
 });

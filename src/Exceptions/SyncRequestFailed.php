@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Exceptions;
+namespace HardImpact\SyncEngine\Exceptions;
 
 use Illuminate\Http\JsonResponse;
 use RuntimeException;

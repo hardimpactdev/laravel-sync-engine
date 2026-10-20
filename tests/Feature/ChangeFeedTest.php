@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-use HardImpact\HouseholdSync\Backfill;
-use HardImpact\HouseholdSync\HouseholdSyncSequence;
-use HardImpact\HouseholdSync\Http\SyncEndpoint;
-use HardImpact\HouseholdSync\Tests\Fixtures\Item;
-use HardImpact\HouseholdSync\Tests\Fixtures\Room;
+use HardImpact\SyncEngine\Backfill;
+use HardImpact\SyncEngine\Http\SyncEndpoint;
+use HardImpact\SyncEngine\SyncSequence;
+use HardImpact\SyncEngine\Tests\Fixtures\Item;
+use HardImpact\SyncEngine\Tests\Fixtures\Room;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 
-function pull(array $overrides = [], int $household = 1): TestResponse
+function pull(array $overrides = [], int $scope = 1): TestResponse
 {
-    return test()->postJson("/sync/{$household}", array_merge([
+    return test()->postJson("/sync/{$scope}", array_merge([
         'protocol' => 1,
         'client_id' => '01JBC4Y0R8T5D8M4QKX3N2V6ZA',
         'cursor' => null,
@@ -24,13 +24,13 @@ function pull(array $overrides = [], int $household = 1): TestResponse
 }
 
 beforeEach(function (): void {
-    Route::post('/sync/{household}', fn (Request $request, int $household) => app(SyncEndpoint::class)->respond($request, $household));
+    Route::post('/sync/{scope}', fn (Request $request, int $scope) => app(SyncEndpoint::class)->respond($request, $scope));
 });
 
-it('gives new rows an upper-case ULID and the next seq of their household', function (): void {
-    $kitchen = Room::create(['household_id' => 1, 'name' => 'Kitchen']);
-    $other = Room::create(['household_id' => 2, 'name' => 'Attic']);
-    $item = Item::create(['household_id' => 1, 'name' => 'Kettle', 'room_id' => $kitchen->id]);
+it('gives new rows an upper-case ULID and the next seq of their scope', function (): void {
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    $other = Room::create(['scope_id' => 2, 'name' => 'Attic']);
+    $item = Item::create(['scope_id' => 1, 'name' => 'Kettle', 'room_id' => $kitchen->id]);
 
     expect($kitchen->sync_id)->toMatch('/^[0-9A-HJKMNP-TV-Z]{26}$/')
         ->and($kitchen->changeSeq())->toBe(1)
@@ -39,7 +39,7 @@ it('gives new rows an upper-case ULID and the next seq of their household', func
 });
 
 it('takes a new seq only when a synced attribute changes', function (): void {
-    $item = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $item = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
 
     $item->update(['views' => 5]);
     $item->touch();
@@ -50,26 +50,26 @@ it('takes a new seq only when a synced attribute changes', function (): void {
 });
 
 it('refuses to hand out a seq outside a transaction', function (): void {
-    HouseholdSyncSequence::next(DB::connection(), 1);
+    SyncSequence::next(DB::connection(), 1);
 })->throws(LogicException::class);
 
 it('rolls the seq back with the write', function (): void {
     try {
         DB::transaction(function (): void {
-            Item::create(['household_id' => 1, 'name' => 'Kettle']);
+            Item::create(['scope_id' => 1, 'name' => 'Kettle']);
 
             throw new RuntimeException('abort');
         });
     } catch (RuntimeException) {
     }
 
-    expect(Item::create(['household_id' => 1, 'name' => 'Toaster'])->changeSeq())->toBe(1);
+    expect(Item::create(['scope_id' => 1, 'name' => 'Toaster'])->changeSeq())->toBe(1);
 });
 
 it('serves a first pull of every live row in seq order', function (): void {
-    $kitchen = Room::create(['household_id' => 1, 'name' => 'Kitchen']);
-    $kettle = Item::create(['household_id' => 1, 'name' => 'Kettle', 'room_id' => $kitchen->id]);
-    Item::create(['household_id' => 2, 'name' => 'Not ours']);
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle', 'room_id' => $kitchen->id]);
+    Item::create(['scope_id' => 2, 'name' => 'Not ours']);
 
     pull()
         ->assertOk()
@@ -83,12 +83,12 @@ it('serves a first pull of every live row in seq order', function (): void {
 });
 
 it('pulls only what changed after the cursor, with each row once', function (): void {
-    $kettle = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $cursor = pull()->json('cursor');
 
     $kettle->update(['name' => 'Kettle 2']);
     $kettle->update(['name' => 'Kettle 3']);
-    $toaster = Item::create(['household_id' => 1, 'name' => 'Toaster']);
+    $toaster = Item::create(['scope_id' => 1, 'name' => 'Toaster']);
 
     $changes = pull(['cursor' => $cursor])->assertOk()->json('changes');
 
@@ -99,8 +99,8 @@ it('pulls only what changed after the cursor, with each row once', function (): 
 it('pages through the feed without losing rows', function (): void {
     foreach (range(1, 7) as $number) {
         $number % 2 === 0
-            ? Room::create(['household_id' => 1, 'name' => "Room {$number}"])
-            : Item::create(['household_id' => 1, 'name' => "Item {$number}"]);
+            ? Room::create(['scope_id' => 1, 'name' => "Room {$number}"])
+            : Item::create(['scope_id' => 1, 'name' => "Item {$number}"]);
     }
 
     $seen = [];
@@ -116,8 +116,8 @@ it('pages through the feed without losing rows', function (): void {
 });
 
 it('sends deletes as tombstones and soft deletes the same way', function (): void {
-    $kitchen = Room::create(['household_id' => 1, 'name' => 'Kitchen']);
-    $kettle = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $cursor = pull()->json('cursor');
 
     $kitchen->delete();
@@ -133,7 +133,7 @@ it('sends deletes as tombstones and soft deletes the same way', function (): voi
 });
 
 it('syncs a restored row again as an upsert', function (): void {
-    $kettle = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $kettle->delete();
     $cursor = pull()->json('cursor');
 
@@ -146,18 +146,18 @@ it('syncs a restored row again as an upsert', function (): void {
 });
 
 it('returns only the entities the app asks for', function (): void {
-    Room::create(['household_id' => 1, 'name' => 'Kitchen']);
-    Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    Item::create(['scope_id' => 1, 'name' => 'Kettle']);
 
     expect(array_column(pull(['entities' => ['items']])->json('changes'), 'entity'))->toBe(['items']);
 });
 
 it('backfills existing rows into the feed', function (): void {
     DB::table('items')->insert([
-        ['household_id' => 1, 'sync_id' => '01JBC59ZQ0B2D4F6H8K0M2P4R6', 'change_seq' => null, 'name' => 'Old kettle'],
+        ['scope_id' => 1, 'sync_id' => '01JBC59ZQ0B2D4F6H8K0M2P4R6', 'change_seq' => null, 'name' => 'Old kettle'],
     ]);
-    DB::statement('CREATE TABLE legacy (id integer primary key, household_id integer, sync_id char(26), change_seq integer)');
-    DB::table('legacy')->insert([['household_id' => 1], ['household_id' => 1]]);
+    DB::statement('CREATE TABLE legacy (id integer primary key, scope_id integer, sync_id char(26), change_seq integer)');
+    DB::table('legacy')->insert([['scope_id' => 1], ['scope_id' => 1]]);
 
     Backfill::run('items');
     Backfill::run('legacy');
@@ -169,21 +169,21 @@ it('backfills existing rows into the feed', function (): void {
 });
 
 it('asks for a resync when the cursor is older than the pruned history', function (): void {
-    $kettle = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $cursor = pull()->json('cursor');
     $kettle->delete();
-    Item::create(['household_id' => 1, 'name' => 'Toaster']);
+    Item::create(['scope_id' => 1, 'name' => 'Toaster']);
 
     $this->travel(200)->days();
-    $this->artisan('household-sync:prune-tombstones')->assertSuccessful();
+    $this->artisan('sync-engine:prune-tombstones')->assertSuccessful();
 
     pull(['cursor' => $cursor])->assertStatus(409)->assertJsonPath('error.code', 'resync_required');
     pull()->assertOk()->assertJsonCount(1, 'changes');
 });
 
-it('rejects a cursor of another household', function (): void {
-    Item::create(['household_id' => 2, 'name' => 'Kettle']);
-    $cursor = pull(household: 2)->json('cursor');
+it('rejects a cursor of another scope', function (): void {
+    Item::create(['scope_id' => 2, 'name' => 'Kettle']);
+    $cursor = pull(scope: 2)->json('cursor');
 
     pull(['cursor' => $cursor])->assertStatus(422)->assertJsonPath('error.code', 'invalid_request');
 });
@@ -200,7 +200,7 @@ it('validates the envelope', function (array $body, int $status, string $code): 
 ]);
 
 it('answers in the shape of the protocol fixture', function (): void {
-    Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    Item::create(['scope_id' => 1, 'name' => 'Kettle']);
 
     $fixture = json_decode((string) file_get_contents(__DIR__.'/../../fixtures/v1/push-response.json'), true);
 

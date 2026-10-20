@@ -8,7 +8,7 @@ import {
 } from "../src/client.ts";
 import { createSyncScheduler } from "../src/scheduler.ts";
 import { cursorOf } from "../src/sync.ts";
-import { household, outbox, pulled, setup, type Store } from "./setup.ts";
+import { scope, outbox, pulled, setup, type Store } from "./setup.ts";
 
 const client = "01JBC4Y0R8T5D8M4QKX3N2V6ZA";
 const kettle = "01JBC59ZQ0B2D4F6H8K0M2P4R6";
@@ -38,7 +38,7 @@ function page(changes: unknown[], cursor: string, hasMore = false, acks: unknown
 }
 
 function syncWith(store: Store, transport: SyncTransport) {
-    return createSyncClient({ store, householdId: household, clientId: client, entities: ["rooms", "items"], transport });
+    return createSyncClient({ store, scopeId: scope, clientId: client, entities: ["rooms", "items"], transport });
 }
 
 function names(store: Store) {
@@ -58,7 +58,7 @@ test("a first sync pulls every page from a null cursor and stores the cursor", a
     assert.deepEqual(server.sent.map((body) => body.cursor), [null, "c1"]);
     assert.deepEqual(server.sent[0], { protocol: 1, client_id: client, cursor: null, entities: ["rooms", "items"], changes: [] });
     assert.deepEqual(names(store), ["Kettle", "Toaster"]);
-    assert.equal(cursorOf(store, household), "c2");
+    assert.equal(cursorOf(store, scope), "c2");
 });
 
 test("a sync pushes the outbox, applies the acks and stops when nothing is left", async () => {
@@ -117,7 +117,7 @@ test("server errors map to outcomes and never lose the batch", async () => {
     assert.deepEqual(outcome, { status: "retry", retryAfterMs: 30_000 });
 });
 
-test("a household the user lost is purged, and the lost changes are counted", async () => {
+test("a scope the user lost is purged, and the lost changes are counted", async () => {
     const { store } = setup();
     pulled(store, "items", kettle, { name: "Kettle" }, 4);
     store.update("items", kettle, { notes: "Descale" });
@@ -127,7 +127,7 @@ test("a household the user lost is purged, and the lost changes are counted", as
     assert.deepEqual(outcome, { status: "gone", lostChanges: 1 });
     assert.deepEqual(names(store), []);
     assert.deepEqual(outbox(store), []);
-    assert.equal(cursorOf(store, household), null);
+    assert.equal(cursorOf(store, scope), null);
 });
 
 test("a resync pulls from the start and sweeps rows the server no longer has", async () => {
@@ -282,7 +282,7 @@ test("a pull waits while the server has seen changes whose acks were lost", asyn
         if (server.sent.length === 2) (answer.body as Record<string, unknown>).last_position = body.changes[0]?.position ?? 1;
         return answer;
     };
-    const sync = createSyncClient({ store, householdId: household, clientId: client, entities: ["counters"], transport });
+    const sync = createSyncClient({ store, scopeId: scope, clientId: client, entities: ["counters"], transport });
 
     assert.deepEqual(await sync.sync(), { status: "offline" });
     assert.equal((await sync.sync()).status, "synced");

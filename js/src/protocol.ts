@@ -1,6 +1,6 @@
 import type { Row } from "./database";
 
-// The wire format of docs/protocol-v1.md, as the phone sends and reads it.
+// The wire format of docs/protocol-v1.md, as the device sends and reads it.
 
 /** One change in a push request (§3.1). */
 export type WireChange = {

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Push;
+namespace HardImpact\SyncEngine\Push;
 
 use RuntimeException;
 

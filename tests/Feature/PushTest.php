@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-use HardImpact\HouseholdSync\Events\HouseholdChanged;
-use HardImpact\HouseholdSync\Http\SyncEndpoint;
-use HardImpact\HouseholdSync\Tests\Fixtures\Counter;
-use HardImpact\HouseholdSync\Tests\Fixtures\Item;
-use HardImpact\HouseholdSync\Tests\Fixtures\Room;
+use HardImpact\SyncEngine\Events\ScopeChanged;
+use HardImpact\SyncEngine\Http\SyncEndpoint;
+use HardImpact\SyncEngine\Tests\Fixtures\Counter;
+use HardImpact\SyncEngine\Tests\Fixtures\Item;
+use HardImpact\SyncEngine\Tests\Fixtures\Room;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
@@ -15,7 +15,7 @@ use Illuminate\Testing\TestResponse;
 const PHONE = '01JBC4Y0R8T5D8M4QKX3N2V6ZA';
 
 beforeEach(function (): void {
-    Route::post('/sync/{household}', fn (Request $request, int $household) => app(SyncEndpoint::class)->respond($request, $household));
+    Route::post('/sync/{scope}', fn (Request $request, int $scope) => app(SyncEndpoint::class)->respond($request, $scope));
 });
 
 /** A ULID made from a number, so tests read well. */
@@ -25,9 +25,9 @@ function id(int $number): string
 }
 
 /** @param list<array<string, mixed>> $changes */
-function push(array $changes, ?string $cursor = null, int $household = 1, string $client = PHONE): TestResponse
+function push(array $changes, ?string $cursor = null, int $scope = 1, string $client = PHONE): TestResponse
 {
-    return test()->postJson("/sync/{$household}", [
+    return test()->postJson("/sync/{$scope}", [
         'protocol' => 1,
         'client_id' => $client,
         'cursor' => $cursor,
@@ -59,7 +59,7 @@ it('creates rows with the phone\'s ids and acks each change with its seq', funct
 });
 
 it('patches only the listed fields', function (): void {
-    $item = Item::create(['household_id' => 1, 'name' => 'Kettle', 'notes' => 'Descale']);
+    $item = Item::create(['scope_id' => 1, 'name' => 'Kettle', 'notes' => 'Descale']);
 
     push([change(1, 'items', 0, 'upsert', ['id' => $item->sync_id, 'fields' => ['name' => 'Kettle 2']])])->assertOk();
 
@@ -85,7 +85,7 @@ it('rejects a reused change id with other content', function (): void {
 });
 
 it('rejects invalid values with field errors and the current row, and keeps going', function (): void {
-    $item = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $item = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
 
     $response = push([
         change(1, 'items', 0, 'upsert', ['id' => $item->sync_id, 'fields' => ['name' => '']]),
@@ -112,7 +112,7 @@ it('refuses fields and operations the entity does not allow', function (array $c
 ]);
 
 it('lets a delete win over a later edit', function (): void {
-    $item = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $item = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $item->delete();
 
     push([change(1, 'items', 0, 'upsert', ['id' => $item->sync_id, 'fields' => ['name' => 'Kettle 2']])])
@@ -120,7 +120,7 @@ it('lets a delete win over a later edit', function (): void {
 });
 
 it('deletes rows, and treats a delete of an unknown row as done', function (): void {
-    $room = Room::create(['household_id' => 1, 'name' => 'Hall']);
+    $room = Room::create(['scope_id' => 1, 'name' => 'Hall']);
 
     $response = push([
         change(1, 'rooms', 0, 'delete', ['id' => $room->sync_id]),
@@ -133,7 +133,7 @@ it('deletes rows, and treats a delete of an unknown row as done', function (): v
 });
 
 it('maps a new room onto an existing one with the same name, also for later changes', function (): void {
-    $kitchen = Room::create(['household_id' => 1, 'name' => 'Kitchen']);
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
 
     $response = push([
         change(1, 'rooms', 100, 'upsert', ['fields' => ['name' => 'kitchen']]),
@@ -151,7 +151,7 @@ it('maps a new room onto an existing one with the same name, also for later chan
 });
 
 it('remaps an operation that lands on an existing row', function (): void {
-    $milk = Counter::create(['household_id' => 1, 'name' => 'Milk', 'quantity' => 2]);
+    $milk = Counter::create(['scope_id' => 1, 'name' => 'Milk', 'quantity' => 2]);
 
     push([change(1, 'counters', 300, 'adjust', ['args' => ['name' => 'Milk', 'delta' => 1]])])
         ->assertJsonPath('acks.0.remap', ['from' => id(300), 'to' => $milk->sync_id]);
@@ -160,7 +160,7 @@ it('remaps an operation that lands on an existing row', function (): void {
 });
 
 it('reports overwritten fields when the row changed after the phone saw it', function (): void {
-    $item = Item::create(['household_id' => 1, 'name' => 'Kettle']);
+    $item = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $item->update(['notes' => 'Changed on the web']);
 
     push([change(1, 'items', 0, 'upsert', ['id' => $item->sync_id, 'base_seq' => 1, 'fields' => ['notes' => 'Phone']])])
@@ -168,16 +168,16 @@ it('reports overwritten fields when the row changed after the phone saw it', fun
 });
 
 it('pokes once per commit with the pushing install, and never for a rollback', function (): void {
-    Event::fake([HouseholdChanged::class]);
+    Event::fake([ScopeChanged::class]);
 
     push([
         change(1, 'rooms', 100, 'upsert', ['fields' => ['name' => 'Kitchen']]),
         change(2, 'items', 200, 'upsert', ['fields' => ['name' => '']]),
         change(3, 'items', 201, 'upsert', ['fields' => ['name' => 'Kettle']]),
     ]);
-    Item::create(['household_id' => 1, 'name' => 'Toaster']);
+    Item::create(['scope_id' => 1, 'name' => 'Toaster']);
 
-    $pokes = Event::dispatched(HouseholdChanged::class)->map(fn (array $event): array => [$event[0]->seq, $event[0]->clientId])->all();
+    $pokes = Event::dispatched(ScopeChanged::class)->map(fn (array $event): array => [$event[0]->seq, $event[0]->clientId])->all();
     expect($pokes)->toBe([[2, PHONE], [3, null]]);
 });
 
@@ -193,8 +193,8 @@ it('validates each change in the envelope', function (): void {
         ->assertStatus(422)->assertJsonPath('error.code', 'invalid_request');
 });
 
-it('rejects an id that belongs to a row of another household', function (): void {
-    $theirs = Item::create(['household_id' => 2, 'name' => 'Theirs']);
+it('rejects an id that belongs to a row of another scope', function (): void {
+    $theirs = Item::create(['scope_id' => 2, 'name' => 'Theirs']);
 
     push([change(1, 'items', 0, 'upsert', ['id' => $theirs->sync_id, 'fields' => ['name' => 'Mine']])])
         ->assertOk()

@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync;
+namespace HardImpact\SyncEngine;
 
-use HardImpact\HouseholdSync\Console\PruneTombstones;
+use HardImpact\SyncEngine\Console\PruneTombstones;
 use Illuminate\Support\ServiceProvider;
 
-final class HouseholdSyncServiceProvider extends ServiceProvider
+final class SyncEngineServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__.'/../config/household-sync.php', 'household-sync');
+        $this->mergeConfigFrom(__DIR__.'/../config/sync-engine.php', 'sync-engine');
         $this->app->singleton(SyncEntities::class);
     }
 
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
-        $this->publishes([__DIR__.'/../config/household-sync.php' => config_path('household-sync.php')], 'household-sync-config');
+        $this->publishes([__DIR__.'/../config/sync-engine.php' => config_path('sync-engine.php')], 'sync-engine-config');
 
         if ($this->app->runningInConsole()) {
             $this->commands([PruneTombstones::class]);
