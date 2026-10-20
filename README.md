@@ -1,24 +1,19 @@
-# Laravel Sync Engine
+# Sync Engine for Laravel
 
-Local-first sync between a Laravel server and an app that keeps its data in
-SQLite on the device.
+The server half of Sync Engine: local-first sync between a Laravel app and an
+app that keeps its data in SQLite on the device. The client half is the
+TypeScript package
+[sync-engine-typescript](https://github.com/hardimpactdev/sync-engine-typescript)
+(`@hardimpactdev/sync-engine`).
 
-- **Server half (Composer):** a Laravel package. It gives every write a
-  per-scope `change_seq`, serves a change feed after a cursor, applies pushed
-  changes through your own domain code, and fires an event after each commit.
-- **Client half (npm):** a framework-agnostic TypeScript client over any
-  synchronous SQLite binding (expo-sqlite, node:sqlite, better-sqlite3), behind
-  a four-method adapter. Every
-  write goes through one store with an outbox. A sync client pushes the outbox
-  and pulls the feed. A scheduler decides when to sync.
-- **React hooks (optional):** `useLocalQuery` reads local data and renders
-  again when its tables change. Reads are synchronous, so a screen has its data
-  on the first render.
+The package gives every write a per-scope `change_seq`, serves a change feed
+after a cursor, applies pushed changes through your own domain code, and fires
+an event after each commit that you broadcast as a real-time poke.
 
 A **scope** is the unit that syncs together and that a user may read: a team, a
 household, a workspace. Your app decides what a scope is and who may read it.
 
-> **Status:** pre-release. The packages are not on Packagist or npm yet.
+> **Status:** pre-release. The package is not on Packagist yet.
 
 ## How it works
 
@@ -38,28 +33,26 @@ edit. Counters move as deltas through named operations, so concurrent changes
 add up.
 
 The wire contract is [`docs/protocol-v1.md`](docs/protocol-v1.md). The JSON
-fixtures in [`fixtures/v1/`](fixtures/v1) pin it, and both test suites read
-them.
+fixtures in [`fixtures/v1/`](fixtures/v1) pin it. This repository owns both;
+sync-engine-typescript keeps a copy that its CI checks against this one.
 
 ## Requirements
 
 - PHP 8.4+ and Laravel 13.
-- A TypeScript-aware bundler on the client (Metro, Vite, esbuild). The npm
-  package ships TypeScript source.
-- React 18+ only if you use `@hardimpactdev/laravel-sync-engine/react`.
+- On the device, [`@hardimpactdev/sync-engine`](https://github.com/hardimpactdev/sync-engine-typescript),
+  or any client that speaks protocol v1.
 
 ## Install
 
-Until the packages are published, install from GitHub. Add the repository to
+Until the package is published, install it from GitHub. Add the repository to
 your `composer.json`:
 
 ```json
-"repositories": [{ "type": "vcs", "url": "https://github.com/hardimpactdev/laravel-sync-engine" }]
+"repositories": [{ "type": "vcs", "url": "https://github.com/hardimpactdev/sync-engine-laravel" }]
 ```
 
 ```sh
-composer require hardimpactdev/laravel-sync-engine:dev-main
-npm install github:hardimpactdev/laravel-sync-engine
+composer require hardimpactdev/sync-engine:dev-main
 ```
 
 The service provider registers itself. It loads the engine's migrations, which
@@ -249,7 +242,12 @@ Event::listen(function (ScopeChanged $event) {
 Broadcast::channel('sync.{syncId}', fn (User $user, string $syncId) => $user->teams()->where('sync_id', $syncId)->exists());
 ```
 
-The poke carries no row data. It only tells devices to pull.
+The poke carries no row data. It only tells devices to pull. On the device,
+listen with Echo and trigger a sync:
+
+```ts
+echo.private(`sync.${teamSyncId}`).listen(".scope.changed", () => scheduler.trigger("poke"));
+```
 
 ### Prune old tombstones
 
@@ -263,110 +261,6 @@ Schedule::command('sync-engine:prune-tombstones')->daily();
 A device whose cursor is older than the pruned history gets `409
 resync_required` and pulls the scope again from the start.
 
-## Client
-
-### Set up the store
-
-Wrap any synchronous SQLite binding in the four-method `SqlDatabase` adapter.
-For expo-sqlite:
-
-```ts
-import { openDatabaseSync } from "expo-sqlite";
-import type { SqlDatabase } from "@hardimpactdev/laravel-sync-engine";
-
-const sqlite = openDatabaseSync("app.db");
-const db: SqlDatabase = {
-    exec: (sql) => sqlite.execSync(sql),
-    run: (sql, params = []) => ({ changes: sqlite.runSync(sql, params).changes }),
-    all: (sql, params = []) => sqlite.getAllSync(sql, params),
-    get: (sql, params = []) => sqlite.getFirstSync(sql, params) ?? null,
-};
-```
-
-[`js/tests/memory-database.ts`](js/tests/memory-database.ts) does the same for
-node:sqlite. Each synced table has the convention columns
-`sync_id`, the scope column, `server_id`, `server_seq`, `created_at`,
-`updated_at` and `deleted_at`. Columns that start with `local_` never sync.
-
-```ts
-import { createLocalStore, createUlidFactory, migrate, syncEngineSchemaV1 } from "@hardimpactdev/laravel-sync-engine";
-import { getRandomBytes } from "expo-crypto"; // or crypto.getRandomValues
-
-migrate(db, [syncEngineSchemaV1, appSchemaV1]);
-
-const store = createLocalStore(db, {
-    tables: ["projects", "customers", "counters"],
-    entities: {
-        projects: { references: { customer_id: "customers" }, serverOwned: ["archived_at"] },
-        counters: { operations: { adjust: { counters: [{ field: "quantity", delta: "delta" }] } } },
-    },
-    scopeColumn: "team_id",
-    newId: createUlidFactory((count) => getRandomBytes(count)),
-});
-
-const id = store.insert("projects", { team_id: teamId, name: "Launch" });
-store.update("projects", id, { name: "Launch v2" });
-store.operate("counters", counterId, "adjust", { delta: 1 });
-store.remove("projects", id);
-```
-
-The scope column is `scope_id` unless you pass `scopeColumn` (for example
-`"team_id"`), like `syncScopeColumn()` on the server. A table without that
-column, such as a child row, passes `scope: (row, db) => ...` in its entity spec
-to say which scope a row belongs to.
-
-### Sync
-
-The app supplies the transport, so authentication and the base URL stay in the
-app:
-
-```ts
-import { createSyncClient, createSyncScheduler } from "@hardimpactdev/laravel-sync-engine";
-
-const client = createSyncClient({
-    store,
-    scopeId: teamId, // the scope's sync_id
-    clientId, // a ULID made once per install
-    entities: ["projects", "customers", "counters"],
-    transport: async (body) => {
-        const response = await fetch(`${baseUrl}/api/teams/${teamId}/sync`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-            body: JSON.stringify(body),
-        });
-        const retryAfter = Number(response.headers.get("Retry-After"));
-        return { status: response.status, body: await response.json().catch(() => null), retryAfter: retryAfter || null };
-    },
-    onRejected: (changes) => showRejected(changes),
-});
-
-const scheduler = createSyncScheduler({ client, onOutcome: (outcome) => console.log(outcome.status) });
-
-scheduler.trigger("start");
-echo.private(`sync.${teamId}`).listen(".scope.changed", () => scheduler.trigger("poke"));
-```
-
-Call `scheduler.trigger("write")` after each local write. The scheduler waits
-briefly after a write so a burst goes in one push, syncs at once on other
-triggers (`foreground`, `network`, `poke`, `manual`) and backs off
-after a failure. Call `scheduler.stop()` and `await scheduler.idle()` before you
-close the database.
-
-### React
-
-```tsx
-import { LocalStoreContext, useLocalQuery } from "@hardimpactdev/laravel-sync-engine/react";
-
-<LocalStoreContext.Provider value={store}>
-    <Projects />
-</LocalStoreContext.Provider>;
-
-function Projects() {
-    const projects = useLocalQuery(["projects"], (store) => store.all("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY name"), []);
-    // ...
-}
-```
-
 ## Rules
 
 - **Write synced models only through Eloquent, so model events fire.**
@@ -379,27 +273,16 @@ function Projects() {
 - **References are sync_ids on the wire,** never server integer ids.
 - **Push handlers call your domain actions.** Do not write around them, or the
   device and the web app will validate differently.
-- **On the device, every write goes through the store,** so each row change has
-  its outbox entry.
 - **A breaking wire change needs a new protocol number.** Change
-  `docs/protocol-v1.md` and `fixtures/v1/` together. Adding an optional field is
-  not breaking.
+  `docs/protocol-v1.md` and `fixtures/v1/` together, here first, then copy them
+  to sync-engine-typescript. Adding an optional field is not breaking.
 
 ## Development
 
-| Intent               | Command             |
-| -------------------- | ------------------- |
-| PHP checks           | `composer check`    |
-| PHP tests            | `composer test`     |
-| TypeScript tests     | `npm test`          |
-| TypeScript typecheck | `npm run typecheck` |
-
-| Path        | What                                      |
-| ----------- | ----------------------------------------- |
-| `src/`      | Laravel package                           |
-| `js/src/`   | TypeScript client and React hooks         |
-| `fixtures/` | Wire format fixtures read by both suites  |
-| `docs/`     | Protocol                                  |
+| Intent     | Command          |
+| ---------- | ---------------- |
+| All checks | `composer check` |
+| Tests      | `composer test`  |
 
 ## License
 
