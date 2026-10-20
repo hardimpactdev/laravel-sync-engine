@@ -232,3 +232,33 @@ test("the scheduler debounces writes and backs off after failures", async () => 
     scheduler.trigger("manual");
     assert.equal(timers.length, 0);
 });
+
+test("the scheduler survives a run that throws and reports when it is idle", async () => {
+    let release!: () => void;
+    const errors: unknown[] = [];
+    const timers: number[] = [];
+    const scheduler = createSyncScheduler({
+        client: {
+            sync: () =>
+                new Promise((_, reject) => {
+                    release = () => reject(new Error("database is closed"));
+                }),
+        },
+        onError: (error) => errors.push(error),
+        setTimer: (_run, ms) => timers.push(ms),
+        clearTimer: () => undefined,
+        random: () => 0,
+    });
+
+    scheduler.trigger("start");
+    let idle = false;
+    const waiting = scheduler.idle().then(() => (idle = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(idle, false);
+
+    release();
+    await waiting;
+    assert.equal(errors.length, 1);
+    assert.deepEqual(timers, [500], "a thrown run retries after a backoff");
+});
+

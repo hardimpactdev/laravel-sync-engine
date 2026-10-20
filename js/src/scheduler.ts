@@ -9,6 +9,8 @@ export type SyncTrigger = "start" | "write" | "foreground" | "network" | "poke" 
 export type SyncSchedulerOptions = {
     client: SyncClient;
     onOutcome?(outcome: SyncOutcome, trigger: SyncTrigger | "retry"): void;
+    /** A run threw, for example because its database closed. It retries like `retry`. */
+    onError?(error: unknown): void;
     /** Wait after a write, so a burst of taps goes in one push. Default 200 ms. */
     writeDelayMs?: number;
     /** First wait after a failure. It doubles up to `maxBackoffMs`. Default 1 s. */
@@ -25,6 +27,8 @@ export type SyncScheduler = {
     trigger(reason: SyncTrigger): void;
     /** Stops all timers. Later triggers do nothing. */
     stop(): void;
+    /** Resolves when no run is in flight. Close the database after it. */
+    idle(): Promise<void>;
 };
 
 const stopping: ReadonlySet<SyncOutcome["status"]> = new Set(["upgrade_required", "gone", "unauthorized", "invalid"]);
@@ -40,6 +44,7 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
     let timer: unknown = null;
     let failures = 0;
     let stopped = false;
+    let inFlight: Promise<void> | null = null;
 
     function schedule(ms: number, trigger: SyncTrigger | "retry") {
         if (timer !== null) clearTimer(timer);
@@ -49,9 +54,24 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
         }, ms);
     }
 
-    async function run(trigger: SyncTrigger | "retry") {
+    function run(trigger: SyncTrigger | "retry"): Promise<void> {
+        const current = attempt(trigger).finally(() => {
+            if (inFlight === current) inFlight = null;
+        });
+        inFlight = current;
+        return current;
+    }
+
+    async function attempt(trigger: SyncTrigger | "retry") {
         if (stopped) return;
-        const outcome = await options.client.sync();
+        let outcome: SyncOutcome;
+        try {
+            outcome = await options.client.sync();
+        } catch (error) {
+            if (stopped) return;
+            options.onError?.(error);
+            outcome = { status: "retry", retryAfterMs: null };
+        }
         if (stopped) return;
         options.onOutcome?.(outcome, trigger);
         if (outcome.status === "synced") {
@@ -90,6 +110,9 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
             stopped = true;
             if (timer !== null) clearTimer(timer);
             timer = null;
+        },
+        async idle() {
+            while (inFlight) await inFlight.catch(() => undefined);
         },
     };
 }
