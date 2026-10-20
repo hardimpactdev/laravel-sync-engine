@@ -192,3 +192,14 @@ it('validates each change in the envelope', function (): void {
     push([['change_id' => 'nope', 'entity' => 'items', 'id' => id(1), 'op' => 'upsert']])
         ->assertStatus(422)->assertJsonPath('error.code', 'invalid_request');
 });
+
+it('rejects an id that belongs to a row of another household', function (): void {
+    $theirs = Item::create(['household_id' => 2, 'name' => 'Theirs']);
+
+    push([change(1, 'items', 0, 'upsert', ['id' => $theirs->sync_id, 'fields' => ['name' => 'Mine']])])
+        ->assertOk()
+        ->assertJsonPath('acks.0.status', 'rejected')
+        ->assertJsonPath('acks.0.error.code', 'forbidden');
+
+    expect($theirs->fresh()->name)->toBe('Theirs');
+});
