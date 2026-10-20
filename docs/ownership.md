@@ -8,7 +8,7 @@ The engine is built once, here, and used by both apps.
 | `js/`: sync client (push, pull, resync, purge) and scheduler (debounce, backoff) | Hauzer agent | Hauzer step 2 |
 | `js/`: realtime pokes, file queue, backfill | Hauzer agent | Hauzer steps 3–4 |
 | `src/`: sequence, `SyncsToDevices`, tombstones, receipts, cursor, pull feed | Hauzer agent              | Hauzer step 1 |
-| `src/`: push applier, entity specs, poke broadcast                  | Hauzer agent              | Hauzer step 3 |
+| `src/`: push applier, receipts, aliases, write specs, `HouseholdChanged` event | Hauzer agent | Hauzer step 3 |
 
 Rules:
 

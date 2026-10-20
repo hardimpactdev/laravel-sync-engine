@@ -15,7 +15,7 @@ final class PruneTombstones extends Command
 {
     protected $signature = 'household-sync:prune-tombstones {--days= : Keep tombstones newer than this many days}';
 
-    protected $description = 'Prune old sync tombstones and raise the household floor_seq.';
+    protected $description = 'Prune old sync tombstones and receipts, and raise the household floor_seq.';
 
     public function handle(): int
     {
@@ -45,7 +45,9 @@ final class PruneTombstones extends Command
             });
         }
 
-        $this->info("Pruned tombstones older than {$days} days for {$floors->count()} households.");
+        $receipts = DB::table(Config::receiptsTable())->where('created_at', '<', Date::now()->subDays(Config::receiptDays()))->delete();
+
+        $this->info("Pruned tombstones older than {$days} days for {$floors->count()} households, and {$receipts} receipts.");
 
         return self::SUCCESS;
     }

@@ -11,6 +11,8 @@ export type WireChange = {
     fields?: Row;
     args?: Row;
     base_seq: number | null;
+    /** The change's place in this install's outbox. It only grows. */
+    position?: number;
     depends_on?: string[];
     merge?: boolean;
     client_time: string;
@@ -57,5 +59,7 @@ export type PullPage = {
 export type SyncResponse = PullPage & {
     protocol: 1;
     acks: Ack[];
+    /** The highest outbox position of this install the server has seen. */
+    last_position?: number;
     server_time: string;
 };

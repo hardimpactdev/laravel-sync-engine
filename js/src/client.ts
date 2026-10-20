@@ -111,7 +111,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
                 return failure;
             }
 
-            const response = result.body as PullPage & { acks: Ack[] };
+            const response = result.body as PullPage & { acks: Ack[]; last_position?: number };
             if (ids.length) {
                 const acks = applyAcks(store, householdId, response.acks);
                 const answered = new Set(response.acks.map((ack) => ack.change_id));
@@ -120,6 +120,11 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
                 if (acks.rejected.length) options.onRejected?.(acks.rejected);
                 pushed += ids.length - unanswered.length;
             }
+
+            // The server saw changes whose acks this phone has not got, for example
+            // after a lost answer. Their effect may already be in this page, so
+            // send them again first; the receipts answer them, then pull again.
+            if (typeof response.last_position === "number" && hasUnackedThrough(response.last_position)) continue;
 
             const page = applyPullPage(store, householdId, response);
             if (page.deletedElsewhere.length) options.onDeletedElsewhere?.(page.deletedElsewhere);
@@ -176,6 +181,15 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             (engine.db.get<{ count: number }>(
                 "SELECT COUNT(*) AS count FROM sync_outbox WHERE household_id = ? AND state = 'pending'",
                 [householdId],
+            )?.count ?? 0) > 0
+        );
+    }
+
+    function hasUnackedThrough(position: number): boolean {
+        return (
+            (engine.db.get<{ count: number }>(
+                "SELECT COUNT(*) AS count FROM sync_outbox WHERE household_id = ? AND position <= ?",
+                [householdId, position],
             )?.count ?? 0) > 0
         );
     }
