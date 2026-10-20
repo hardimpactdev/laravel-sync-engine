@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync;
+namespace HardImpact\SyncEngine;
 
-use HardImpact\HouseholdSync\Push\SyncRejection;
-use HardImpact\HouseholdSync\Push\SyncWrite;
+use HardImpact\SyncEngine\Push\SyncRejection;
+use HardImpact\SyncEngine\Push\SyncWrite;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 /**
  * One synced entity, as the app defines it.
  *
- * Read side: `query()` returns the household's live rows; the feed adds the
+ * Read side: `query()` returns the scope's live rows; the feed adds the
  * change_seq filter and order. `row()` serializes one of those rows for the
  * wire: references are sync_ids, never server integer ids. The feed only
  * passes rows that `query()` returned, so `row()` may narrow the model with
@@ -29,7 +29,7 @@ abstract class SyncEntity
     abstract public function name(): string;
 
     /** @return Builder<covariant Model> */
-    abstract public function query(int $householdId): Builder;
+    abstract public function query(int $scopeId): Builder;
 
     /** @return array<string, mixed> */
     abstract public function row(Model $model): array;
@@ -64,9 +64,9 @@ abstract class SyncEntity
         return [];
     }
 
-    public function find(int $householdId, string $syncId): ?Model
+    public function find(int $scopeId, string $syncId): ?Model
     {
-        $query = $this->query($householdId);
+        $query = $this->query($scopeId);
 
         return $query->where($query->getModel()->qualifyColumn('sync_id'), $syncId)->first();
     }

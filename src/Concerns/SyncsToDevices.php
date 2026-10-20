@@ -2,21 +2,22 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Concerns;
+namespace HardImpact\SyncEngine\Concerns;
 
-use HardImpact\HouseholdSync\HouseholdSyncSequence;
-use HardImpact\HouseholdSync\Tombstones;
+use HardImpact\SyncEngine\SyncSequence;
+use HardImpact\SyncEngine\Tombstones;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 use LogicException;
 
 /**
- * Makes a model part of the household change feed.
+ * Makes a model part of its scope's change feed.
  *
  * The table needs a unique `sync_id` (ULID), a nullable `change_seq` and the
- * household column. Every save that changes a synced attribute takes the next
- * change_seq, and every delete leaves a tombstone. Saves and deletes run in a
- * transaction, so the seq and the row commit together.
+ * scope column (`scope_id`, or what `syncScopeColumn()` returns). Every save
+ * that changes a synced attribute takes the next change_seq, and every delete
+ * leaves a tombstone. Saves and deletes run in a transaction, so the seq and
+ * the row commit together.
  *
  * Writes that skip model events (query-builder updates, saveQuietly) skip the
  * feed. Apps must not use them on synced models.
@@ -39,12 +40,12 @@ trait SyncsToDevices
                 return;
             }
 
-            $model->setAttribute('change_seq', HouseholdSyncSequence::next($model->getConnection(), $model->syncHouseholdId()));
+            $model->setAttribute('change_seq', SyncSequence::next($model->getConnection(), $model->syncScopeId()));
         });
 
         static::deleted(function (Model $model): void {
             /** @var Model&self $model */
-            Tombstones::record($model->getConnection(), $model->syncHouseholdId(), $model->syncEntity(), $model->syncId());
+            Tombstones::record($model->getConnection(), $model->syncScopeId(), $model->syncEntity(), $model->syncId());
         });
 
         if (method_exists(static::class, 'restored')) {
@@ -72,20 +73,20 @@ trait SyncsToDevices
         return $this->getTable();
     }
 
-    public function syncHouseholdId(): int
+    public function syncScopeId(): int
     {
-        $householdId = $this->getAttribute($this->syncHouseholdColumn());
+        $scopeId = $this->getAttribute($this->syncScopeColumn());
 
-        if (! is_numeric($householdId)) {
-            throw new LogicException(static::class.' has no household, so it cannot sync.');
+        if (! is_numeric($scopeId)) {
+            throw new LogicException(static::class.' has no scope, so it cannot sync.');
         }
 
-        return (int) $householdId;
+        return (int) $scopeId;
     }
 
-    public function syncHouseholdColumn(): string
+    public function syncScopeColumn(): string
     {
-        return 'household_id';
+        return 'scope_id';
     }
 
     public function syncId(): string

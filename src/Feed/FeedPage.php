@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Feed;
+namespace HardImpact\SyncEngine\Feed;
 
 final readonly class FeedPage
 {

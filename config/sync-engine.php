@@ -7,7 +7,7 @@ return [
     'protocol' => 1,
 
     'tables' => [
-        'states' => 'household_sync_states',
+        'states' => 'sync_states',
         'tombstones' => 'sync_tombstones',
         'receipts' => 'sync_receipts',
         'aliases' => 'sync_aliases',
@@ -17,7 +17,7 @@ return [
     // Rows per pull page; a request may ask for fewer.
     'page_size' => 500,
 
-    // Tombstones older than this are pruned and raise the household's floor_seq.
+    // Tombstones older than this are pruned and raise the scope's floor_seq.
     'tombstone_days' => 180,
 
     // Receipts make a resent change a duplicate. Older ones are pruned.

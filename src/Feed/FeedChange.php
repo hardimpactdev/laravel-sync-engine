@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Feed;
+namespace HardImpact\SyncEngine\Feed;
 
 /** One pulled change (protocol §3.3). */
 final readonly class FeedChange

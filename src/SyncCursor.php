@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync;
+namespace HardImpact\SyncEngine;
 
-use HardImpact\HouseholdSync\Exceptions\SyncRequestFailed;
+use HardImpact\SyncEngine\Exceptions\SyncRequestFailed;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Crypt;
 
-/** The opaque pull cursor: an encrypted {household, seq, protocol}. */
+/** The opaque pull cursor: an encrypted {scope, seq, protocol}. */
 final class SyncCursor
 {
-    public static function encode(int $householdId, int $seq): string
+    public static function encode(int $scopeId, int $seq): string
     {
-        return Crypt::encryptString((string) json_encode(['h' => $householdId, 's' => $seq, 'p' => self::protocol()]));
+        return Crypt::encryptString((string) json_encode(['scope' => $scopeId, 'seq' => $seq, 'protocol' => self::protocol()]));
     }
 
     /** The seq after which to pull. A null cursor means from the start. */
-    public static function decode(?string $cursor, int $householdId): int
+    public static function decode(?string $cursor, int $scopeId): int
     {
         if ($cursor === null) {
             return 0;
@@ -29,15 +29,15 @@ final class SyncCursor
             throw SyncRequestFailed::invalidRequest('The cursor is not valid.');
         }
 
-        if (! is_array($payload) || ($payload['h'] ?? null) !== $householdId || ! is_int($payload['s'] ?? null)) {
-            throw SyncRequestFailed::invalidRequest('The cursor belongs to another household.');
+        if (! is_array($payload) || ($payload['scope'] ?? null) !== $scopeId || ! is_int($payload['seq'] ?? null)) {
+            throw SyncRequestFailed::invalidRequest('The cursor belongs to another scope.');
         }
 
-        if (($payload['p'] ?? null) !== self::protocol()) {
+        if (($payload['protocol'] ?? null) !== self::protocol()) {
             throw SyncRequestFailed::resyncRequired();
         }
 
-        return $payload['s'];
+        return $payload['seq'];
     }
 
     private static function protocol(): int

@@ -2,7 +2,7 @@ import type { Row } from "./database";
 import type { Ack, PullPage, WireChange } from "./protocol";
 import { engineOf, type Engine, type LocalStore, type OutboxEntry } from "./store";
 
-// The phone's half of a sync run, as functions over the store and a parsed
+// The device's half of a sync run, as functions over the store and a parsed
 // response. The HTTP client calls them in this order: takeBatch, post the
 // request, then applyAcks and applyPullPage, or returnToPending on a failure.
 
@@ -16,7 +16,7 @@ export type TakeBatchOptions = {
 };
 
 /**
- * Marks the next sendable changes of a household `sending` and returns them in
+ * Marks the next sendable changes of a scope `sending` and returns them in
  * wire format, in outbox order. A change waits while an earlier change to the
  * same row waits, or while a row it points at waits. When a batch is still
  * marked `sending`, for example after the app was closed mid-request, it
@@ -24,15 +24,15 @@ export type TakeBatchOptions = {
  */
 export function takeBatch(
     store: LocalStore,
-    householdId: string,
+    scopeId: string,
     { limit = maxBatchSize, isUploaded = () => true }: TakeBatchOptions = {},
 ): WireChange[] {
     const engine = engineOf(store);
     return engine.transaction(() => {
-        let batch = outbox(engine, householdId, "sending");
+        let batch = outbox(engine, scopeId, "sending");
         if (batch.length === 0) {
             const waiting = new Set<string>();
-            for (const entry of outbox(engine, householdId, "pending")) {
+            for (const entry of outbox(engine, scopeId, "pending")) {
                 if (batch.length >= Math.min(limit, maxBatchSize)) break;
                 const key = `${entry.entity}:${entry.row_id}`;
                 const waits =
@@ -55,20 +55,20 @@ export function takeBatch(
 }
 
 /** Puts a failed batch back to `pending`. Its changes keep their ids and payloads. */
-export function returnToPending(store: LocalStore, householdId: string, changeIds?: string[]) {
+export function returnToPending(store: LocalStore, scopeId: string, changeIds?: string[]) {
     const engine = engineOf(store);
     engine.transaction(() => {
         if (changeIds) {
             for (const changeId of changeIds) {
                 engine.db.run(
-                    "UPDATE sync_outbox SET state = 'pending' WHERE household_id = ? AND change_id = ? AND state = 'sending'",
-                    [householdId, changeId],
+                    "UPDATE sync_outbox SET state = 'pending' WHERE scope_id = ? AND change_id = ? AND state = 'sending'",
+                    [scopeId, changeId],
                 );
             }
         } else {
             engine.db.run(
-                "UPDATE sync_outbox SET state = 'pending' WHERE household_id = ? AND state = 'sending'",
-                [householdId],
+                "UPDATE sync_outbox SET state = 'pending' WHERE scope_id = ? AND state = 'sending'",
+                [scopeId],
             );
         }
         engine.touch("sync_outbox");
@@ -97,14 +97,14 @@ export type AckResult = {
  * rejected change moves to `sync_rejected` with its values, and its row is
  * restored from the server's `current` with the other queued changes on top.
  */
-export function applyAcks(store: LocalStore, householdId: string, acks: Ack[]): AckResult {
+export function applyAcks(store: LocalStore, scopeId: string, acks: Ack[]): AckResult {
     const engine = engineOf(store);
     const result: AckResult = { applied: [], rejected: [], remapped: [] };
     engine.transaction(() => {
         for (const ack of acks) {
             const entry = engine.db.get<OutboxEntry>(
-                "SELECT * FROM sync_outbox WHERE change_id = ? AND household_id = ?",
-                [ack.change_id, householdId],
+                "SELECT * FROM sync_outbox WHERE change_id = ? AND scope_id = ?",
+                [ack.change_id, scopeId],
             );
             if (!entry) continue;
             if (ack.status === "rejected") {
@@ -128,7 +128,7 @@ export function applyAcks(store: LocalStore, householdId: string, acks: Ack[]): 
             }
             result.applied.push(ack.change_id);
         }
-        markState(engine, householdId, "last_push_at");
+        markState(engine, scopeId, "last_push_at");
         engine.touch("sync_outbox");
     });
     return result;
@@ -145,7 +145,7 @@ function reject(engine: Engine, entry: OutboxEntry, ack: Ack): RejectedChange[] 
         return rejected;
     }
     if (ack.current) {
-        engine.rebaseRow(entry.entity, entry.row_id, ack.current, { householdId: entry.household_id });
+        engine.rebaseRow(entry.entity, entry.row_id, ack.current, { scopeId: entry.scope_id });
         return rejected;
     }
     // The server has no such row. Unsent changes to it were made on top of the
@@ -170,10 +170,10 @@ function keep(
     current: Row | null,
 ): RejectedChange {
     engine.db.run(
-        "INSERT OR REPLACE INTO sync_rejected (change_id, household_id, entity, row_id, op, payload, base_seq, error_code, error_message, error_fields, current, created_at, rejected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO sync_rejected (change_id, scope_id, entity, row_id, op, payload, base_seq, error_code, error_message, error_fields, current, created_at, rejected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             entry.change_id,
-            entry.household_id,
+            entry.scope_id,
             entry.entity,
             entry.row_id,
             entry.op,
@@ -200,7 +200,7 @@ function keep(
 }
 
 export type PullResult = {
-    /** Rows deleted on the server while this phone had unsent changes to them. */
+    /** Rows deleted on the server while this device had unsent changes to them. */
     deletedElsewhere: { entity: string; id: string }[];
 };
 
@@ -210,7 +210,7 @@ export type PullResult = {
  * top, and rows with a queued delete stay hidden. A tombstone deletes the row
  * and drops its unsent changes. Entities this app does not know are skipped.
  */
-export function applyPullPage(store: LocalStore, householdId: string, page: PullPage): PullResult {
+export function applyPullPage(store: LocalStore, scopeId: string, page: PullPage): PullResult {
     const engine = engineOf(store);
     const result: PullResult = { deletedElsewhere: [] };
     engine.transaction(() => {
@@ -228,48 +228,48 @@ export function applyPullPage(store: LocalStore, householdId: string, page: Pull
                 if (row) engine.deleteRow(change.entity, change.id);
                 continue;
             }
-            // An older version than the one this phone has is skipped.
+            // An older version than the one this device has is skipped.
             if (row && typeof row.server_seq === "number" && row.server_seq > change.seq) continue;
             engine.rebaseRow(change.entity, change.id, change.row ?? {}, {
                 seq: change.seq,
-                householdId,
+                scopeId,
             });
         }
         engine.db.run(
-            `INSERT INTO sync_state (household_id, cursor, snapshot_complete, last_pull_at) VALUES (?, ?, ?, ?)
-             ON CONFLICT (household_id) DO UPDATE SET cursor = excluded.cursor,
+            `INSERT INTO sync_state (scope_id, cursor, snapshot_complete, last_pull_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT (scope_id) DO UPDATE SET cursor = excluded.cursor,
                  snapshot_complete = MAX(sync_state.snapshot_complete, excluded.snapshot_complete),
                  last_pull_at = excluded.last_pull_at`,
-            [householdId, page.cursor, page.has_more ? 0 : 1, engine.now()],
+            [scopeId, page.cursor, page.has_more ? 0 : 1, engine.now()],
         );
         engine.touch("sync_state");
     });
     return result;
 }
 
-/** The stored cursor of a household, or null before its first pull. */
-export function cursorOf(store: LocalStore, householdId: string): string | null {
+/** The stored cursor of a scope, or null before its first pull. */
+export function cursorOf(store: LocalStore, scopeId: string): string | null {
     return (
         engineOf(store).db.get<{ cursor: string | null }>(
-            "SELECT cursor FROM sync_state WHERE household_id = ?",
-            [householdId],
+            "SELECT cursor FROM sync_state WHERE scope_id = ?",
+            [scopeId],
         )?.cursor ?? null
     );
 }
 
-function markState(engine: Engine, householdId: string, column: "last_push_at") {
+function markState(engine: Engine, scopeId: string, column: "last_push_at") {
     engine.db.run(
-        `INSERT INTO sync_state (household_id, ${column}) VALUES (?, ?)
-         ON CONFLICT (household_id) DO UPDATE SET ${column} = excluded.${column}`,
-        [householdId, engine.now()],
+        `INSERT INTO sync_state (scope_id, ${column}) VALUES (?, ?)
+         ON CONFLICT (scope_id) DO UPDATE SET ${column} = excluded.${column}`,
+        [scopeId, engine.now()],
     );
     engine.touch("sync_state");
 }
 
-function outbox(engine: Engine, householdId: string, state: OutboxEntry["state"]): OutboxEntry[] {
+function outbox(engine: Engine, scopeId: string, state: OutboxEntry["state"]): OutboxEntry[] {
     return engine.db.all<OutboxEntry>(
-        "SELECT * FROM sync_outbox WHERE household_id = ? AND state = ? ORDER BY position",
-        [householdId, state],
+        "SELECT * FROM sync_outbox WHERE scope_id = ? AND state = ? ORDER BY position",
+        [scopeId, state],
     );
 }
 

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Http;
+namespace HardImpact\SyncEngine\Http;
 
-use HardImpact\HouseholdSync\Config;
-use HardImpact\HouseholdSync\Exceptions\SyncRequestFailed;
-use HardImpact\HouseholdSync\Feed\FeedChange;
-use HardImpact\HouseholdSync\Feed\SyncFeed;
-use HardImpact\HouseholdSync\HouseholdSyncSequence;
-use HardImpact\HouseholdSync\Push\PushApplier;
-use HardImpact\HouseholdSync\SyncCursor;
-use HardImpact\HouseholdSync\SyncEntities;
+use HardImpact\SyncEngine\Config;
+use HardImpact\SyncEngine\Exceptions\SyncRequestFailed;
+use HardImpact\SyncEngine\Feed\FeedChange;
+use HardImpact\SyncEngine\Feed\SyncFeed;
+use HardImpact\SyncEngine\Push\PushApplier;
+use HardImpact\SyncEngine\SyncCursor;
+use HardImpact\SyncEngine\SyncEntities;
+use HardImpact\SyncEngine\SyncSequence;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Date;
@@ -21,7 +21,7 @@ use Illuminate\Validation\Rule;
 
 /**
  * The sync endpoint (protocol §3). The app's controller authenticates the user,
- * checks membership and passes the household's server id.
+ * checks membership and passes the scope's server id.
  *
  * Pushed changes are applied first, so the pull page includes them.
  */
@@ -33,16 +33,16 @@ final readonly class SyncEndpoint
         private PushApplier $push,
     ) {}
 
-    public function respond(Request $request, int $householdId): JsonResponse
+    public function respond(Request $request, int $scopeId): JsonResponse
     {
         try {
-            return $this->handle($request, $householdId);
+            return $this->handle($request, $scopeId);
         } catch (SyncRequestFailed $failure) {
             return $failure->toResponse();
         }
     }
 
-    private function handle(Request $request, int $householdId): JsonResponse
+    private function handle(Request $request, int $scopeId): JsonResponse
     {
         $protocol = Config::protocol();
 
@@ -85,16 +85,16 @@ final readonly class SyncEndpoint
         /** @var list<array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int}> $changes */
         $changes = array_values((array) $request->input('changes'));
 
-        $afterSeq = SyncCursor::decode($input['cursor'] ?? null, $householdId);
+        $afterSeq = SyncCursor::decode($input['cursor'] ?? null, $scopeId);
 
-        if ($afterSeq > 0 && $afterSeq < HouseholdSyncSequence::floor(DB::connection(), $householdId)) {
+        if ($afterSeq > 0 && $afterSeq < SyncSequence::floor(DB::connection(), $scopeId)) {
             throw SyncRequestFailed::resyncRequired();
         }
 
-        $acks = $changes === [] ? [] : $this->push->apply($householdId, $input['client_id'], $changes);
+        $acks = $changes === [] ? [] : $this->push->apply($scopeId, $input['client_id'], $changes);
 
         $page = $this->feed->page(
-            $householdId,
+            $scopeId,
             $input['entities'],
             $afterSeq,
             $input['limit'] ?? Config::pageSize(),
@@ -104,9 +104,9 @@ final readonly class SyncEndpoint
             'protocol' => $protocol,
             'acks' => $acks,
             'changes' => array_map(fn (FeedChange $change): array => $change->toArray(), $page->changes),
-            'cursor' => SyncCursor::encode($householdId, $page->lastSeq),
+            'cursor' => SyncCursor::encode($scopeId, $page->lastSeq),
             'has_more' => $page->hasMore,
-            'last_position' => $this->push->lastPosition($householdId, $input['client_id']),
+            'last_position' => $this->push->lastPosition($scopeId, $input['client_id']),
             'server_time' => Date::now()->utc()->format('Y-m-d\TH:i:s\Z'),
         ]);
     }

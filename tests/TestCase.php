@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Tests;
+namespace HardImpact\SyncEngine\Tests;
 
-use HardImpact\HouseholdSync\HouseholdSyncSequence;
-use HardImpact\HouseholdSync\HouseholdSyncServiceProvider;
-use HardImpact\HouseholdSync\SyncEntities;
-use HardImpact\HouseholdSync\Tests\Fixtures\CounterEntity;
-use HardImpact\HouseholdSync\Tests\Fixtures\ItemEntity;
-use HardImpact\HouseholdSync\Tests\Fixtures\RoomEntity;
+use HardImpact\SyncEngine\SyncEngineServiceProvider;
+use HardImpact\SyncEngine\SyncEntities;
+use HardImpact\SyncEngine\SyncSequence;
+use HardImpact\SyncEngine\Tests\Fixtures\CounterEntity;
+use HardImpact\SyncEngine\Tests\Fixtures\ItemEntity;
+use HardImpact\SyncEngine\Tests\Fixtures\RoomEntity;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 use Orchestra\Testbench\TestCase as Orchestra;
@@ -18,7 +18,7 @@ abstract class TestCase extends Orchestra
 {
     protected function getPackageProviders($app): array
     {
-        return [HouseholdSyncServiceProvider::class];
+        return [SyncEngineServiceProvider::class];
     }
 
     protected function defineEnvironment($app): void
@@ -33,7 +33,7 @@ abstract class TestCase extends Orchestra
 
         Schema::create('rooms', function (Blueprint $table): void {
             $table->id();
-            $table->unsignedBigInteger('household_id');
+            $table->unsignedBigInteger('scope_id');
             $table->char('sync_id', 26)->unique();
             $table->unsignedBigInteger('change_seq')->nullable();
             $table->string('name');
@@ -42,18 +42,18 @@ abstract class TestCase extends Orchestra
 
         Schema::create('counters', function (Blueprint $table): void {
             $table->id();
-            $table->unsignedBigInteger('household_id');
+            $table->unsignedBigInteger('scope_id');
             $table->char('sync_id', 26)->unique();
             $table->unsignedBigInteger('change_seq')->nullable();
             $table->string('name');
             $table->integer('quantity')->default(0);
             $table->timestamps();
-            $table->unique(['household_id', 'name']);
+            $table->unique(['scope_id', 'name']);
         });
 
         Schema::create('items', function (Blueprint $table): void {
             $table->id();
-            $table->unsignedBigInteger('household_id');
+            $table->unsignedBigInteger('scope_id');
             $table->char('sync_id', 26)->unique();
             $table->unsignedBigInteger('change_seq')->nullable();
             $table->foreignId('room_id')->nullable();
@@ -69,7 +69,7 @@ abstract class TestCase extends Orchestra
     {
         parent::setUp();
 
-        HouseholdSyncSequence::flushState();
+        SyncSequence::flushState();
 
         $this->app->make(SyncEntities::class)->register(new ItemEntity, new RoomEntity, new CounterEntity);
     }

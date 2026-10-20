@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Push;
+namespace HardImpact\SyncEngine\Push;
 
-use HardImpact\HouseholdSync\Config;
-use HardImpact\HouseholdSync\HouseholdSyncSequence;
-use HardImpact\HouseholdSync\SyncEntities;
-use HardImpact\HouseholdSync\SyncEntity;
-use HardImpact\HouseholdSync\Tombstones;
+use HardImpact\SyncEngine\Config;
+use HardImpact\SyncEngine\SyncEntities;
+use HardImpact\SyncEngine\SyncEntity;
+use HardImpact\SyncEngine\SyncSequence;
+use HardImpact\SyncEngine\Tombstones;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Date;
@@ -31,27 +31,27 @@ final readonly class PushApplier
      * @param  list<Change>  $changes
      * @return list<Ack>
      */
-    public function apply(int $householdId, string $clientId, array $changes): array
+    public function apply(int $scopeId, string $clientId, array $changes): array
     {
-        return HouseholdSyncSequence::asClient($clientId, fn (): array => DB::transaction(function () use ($householdId, $clientId, $changes): array {
+        return SyncSequence::asClient($clientId, fn (): array => DB::transaction(function () use ($scopeId, $clientId, $changes): array {
             $acks = [];
             $position = 0;
 
             foreach ($changes as $change) {
-                $acks[] = $this->applyOne($householdId, $clientId, $change);
+                $acks[] = $this->applyOne($scopeId, $clientId, $change);
                 $position = max($position, $change['position'] ?? 0);
             }
 
-            $this->recordClient($householdId, $clientId, $position);
+            $this->recordClient($scopeId, $clientId, $position);
 
             return $acks;
         }));
     }
 
     /** The highest outbox position of this install the server has applied. */
-    public function lastPosition(int $householdId, string $clientId): int
+    public function lastPosition(int $scopeId, string $clientId): int
     {
-        $position = DB::table(Config::clientsTable())->where('household_id', $householdId)->where('client_id', $clientId)->value('last_position');
+        $position = DB::table(Config::clientsTable())->where('scope_id', $scopeId)->where('client_id', $clientId)->value('last_position');
 
         return $position === null ? 0 : Config::int($position);
     }
@@ -60,11 +60,11 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return Ack
      */
-    private function applyOne(int $householdId, string $clientId, array $change): array
+    private function applyOne(int $scopeId, string $clientId, array $change): array
     {
         $hash = hash('sha256', (string) json_encode(array_diff_key($change, ['client_time' => true])));
         $receipt = DB::table(Config::receiptsTable())
-            ->where('household_id', $householdId)
+            ->where('scope_id', $scopeId)
             ->where('change_id', $change['change_id'])
             ->first(['payload_hash', 'ack']);
 
@@ -81,20 +81,20 @@ final readonly class PushApplier
         }
 
         try {
-            $ack = DB::transaction(fn (): array => $this->write($householdId, $clientId, $change));
+            $ack = DB::transaction(fn (): array => $this->write($scopeId, $clientId, $change));
         } catch (ValidationException $invalid) {
             /** @var array<string, list<string>> $fields */
             $fields = $invalid->errors();
-            $ack = $this->rejected($change, 'validation', $invalid->getMessage(), $this->current($householdId, $change), $fields);
+            $ack = $this->rejected($change, 'validation', $invalid->getMessage(), $this->current($scopeId, $change), $fields);
         } catch (SyncRejection $rejection) {
-            $ack = $this->rejected($change, $rejection->errorCode, $rejection->getMessage(), $this->current($householdId, $change));
+            $ack = $this->rejected($change, $rejection->errorCode, $rejection->getMessage(), $this->current($scopeId, $change));
         } catch (UniqueConstraintViolationException) {
-            // For example an id that belongs to a row of another household.
-            $ack = $this->rejected($change, 'forbidden', 'This change conflicts with a row this device cannot change.', $this->current($householdId, $change));
+            // For example an id that belongs to a row of another scope.
+            $ack = $this->rejected($change, 'forbidden', 'This change conflicts with a row this device cannot change.', $this->current($scopeId, $change));
         }
 
         DB::table(Config::receiptsTable())->insert([
-            'household_id' => $householdId,
+            'scope_id' => $scopeId,
             'change_id' => $change['change_id'],
             'client_id' => $clientId,
             'payload_hash' => $hash,
@@ -109,22 +109,22 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return Ack
      */
-    private function write(int $householdId, string $clientId, array $change): array
+    private function write(int $scopeId, string $clientId, array $change): array
     {
         if (! $this->entities->has($change['entity'])) {
             throw SyncRejection::unknownEntity($change['entity']);
         }
 
         $entity = $this->entities->get($change['entity']);
-        $syncId = $this->alias($householdId, $entity->name(), $change['id']) ?? $change['id'];
-        $existing = $entity->find($householdId, $syncId);
+        $syncId = $this->alias($scopeId, $entity->name(), $change['id']) ?? $change['id'];
+        $existing = $entity->find($scopeId, $syncId);
         $remap = $syncId !== $change['id'] ? ['from' => $change['id'], 'to' => $syncId] : null;
         $merge = $change['merge'] ?? false;
 
         return match ($change['op']) {
-            'upsert' => $this->upsert($entity, $householdId, $clientId, $change, $syncId, $existing, $remap, $merge),
-            'delete' => $this->delete($entity, $householdId, $clientId, $change, $syncId, $existing),
-            default => $this->operate($entity, $householdId, $clientId, $change, $syncId, $existing, $remap),
+            'upsert' => $this->upsert($entity, $scopeId, $clientId, $change, $syncId, $existing, $remap, $merge),
+            'delete' => $this->delete($entity, $scopeId, $clientId, $change, $syncId, $existing),
+            default => $this->operate($entity, $scopeId, $clientId, $change, $syncId, $existing, $remap),
         };
     }
 
@@ -133,7 +133,7 @@ final readonly class PushApplier
      * @param  array{from: string, to: string}|null  $remap
      * @return Ack
      */
-    private function upsert(SyncEntity $entity, int $householdId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap, bool $merge): array
+    private function upsert(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap, bool $merge): array
     {
         $fields = $change['fields'] ?? [];
 
@@ -143,17 +143,17 @@ final readonly class PushApplier
             }
         }
 
-        if ($existing === null && Tombstones::exists($householdId, $entity->name(), $syncId)) {
+        if ($existing === null && Tombstones::exists($scopeId, $entity->name(), $syncId)) {
             throw SyncRejection::deleted();
         }
 
-        $write = new SyncWrite($householdId, $clientId, $syncId, $this->resolve($entity, $householdId, $fields), [], $existing, $merge);
+        $write = new SyncWrite($scopeId, $clientId, $syncId, $this->resolve($entity, $scopeId, $fields), [], $existing, $merge);
 
         if ($existing === null && ($match = $entity->match($write)) !== null) {
             $to = $this->syncIdOf($match);
-            $this->rememberAlias($householdId, $entity->name(), $change['id'], $to);
+            $this->rememberAlias($scopeId, $entity->name(), $change['id'], $to);
             $remap = ['from' => $change['id'], 'to' => $to];
-            $write = new SyncWrite($householdId, $clientId, $to, $write->fields, [], $match, $merge);
+            $write = new SyncWrite($scopeId, $clientId, $to, $write->fields, [], $match, $merge);
 
             // A plain match keeps the existing row; a merge fills in what it lacks.
             if (! $merge) {
@@ -172,13 +172,13 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return Ack
      */
-    private function delete(SyncEntity $entity, int $householdId, string $clientId, array $change, string $syncId, ?Model $existing): array
+    private function delete(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing): array
     {
         if ($existing === null) {
             return ['change_id' => $change['change_id'], 'status' => 'applied'];
         }
 
-        $entity->delete(new SyncWrite($householdId, $clientId, $syncId, [], [], $existing, false), $existing);
+        $entity->delete(new SyncWrite($scopeId, $clientId, $syncId, [], [], $existing, false), $existing);
 
         return ['change_id' => $change['change_id'], 'status' => 'applied', 'seq' => Tombstones::seqOf($entity->name(), $syncId)];
     }
@@ -188,18 +188,18 @@ final readonly class PushApplier
      * @param  array{from: string, to: string}|null  $remap
      * @return Ack
      */
-    private function operate(SyncEntity $entity, int $householdId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap): array
+    private function operate(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap): array
     {
         if (! in_array($change['op'], $entity->operations(), true)) {
             throw SyncRejection::unknownOperation($change['op']);
         }
 
-        $write = new SyncWrite($householdId, $clientId, $syncId, [], $this->resolve($entity, $householdId, $change['args'] ?? []), $existing, false);
+        $write = new SyncWrite($scopeId, $clientId, $syncId, [], $this->resolve($entity, $scopeId, $change['args'] ?? []), $existing, false);
         $model = $entity->operate($write, $change['op']);
         $to = $this->syncIdOf($model);
 
         if ($to !== $syncId) {
-            $this->rememberAlias($householdId, $entity->name(), $change['id'], $to);
+            $this->rememberAlias($scopeId, $entity->name(), $change['id'], $to);
             $remap = ['from' => $change['id'], 'to' => $to];
         }
 
@@ -212,7 +212,7 @@ final readonly class PushApplier
      * @param  array<string, mixed>  $values
      * @return array<string, mixed>
      */
-    private function resolve(SyncEntity $entity, int $householdId, array $values): array
+    private function resolve(SyncEntity $entity, int $scopeId, array $values): array
     {
         foreach ($entity->references() as $field => $target) {
             if (! array_key_exists($field, $values) || $values[$field] === null) {
@@ -220,8 +220,8 @@ final readonly class PushApplier
             }
 
             $id = is_string($values[$field]) ? $values[$field] : '';
-            $id = $this->alias($householdId, $target, $id) ?? $id;
-            $values[$field] = $this->entities->get($target)->find($householdId, $id) ?? throw SyncRejection::parentRejected($field);
+            $id = $this->alias($scopeId, $target, $id) ?? $id;
+            $values[$field] = $this->entities->get($target)->find($scopeId, $id) ?? throw SyncRejection::parentRejected($field);
         }
 
         return $values;
@@ -286,23 +286,23 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return array<string, mixed>|null
      */
-    private function current(int $householdId, array $change): ?array
+    private function current(int $scopeId, array $change): ?array
     {
         if (! $this->entities->has($change['entity'])) {
             return null;
         }
 
         $entity = $this->entities->get($change['entity']);
-        $syncId = $this->alias($householdId, $entity->name(), $change['id']) ?? $change['id'];
-        $model = $entity->find($householdId, $syncId);
+        $syncId = $this->alias($scopeId, $entity->name(), $change['id']) ?? $change['id'];
+        $model = $entity->find($scopeId, $syncId);
 
         return $model === null ? null : $entity->row($model);
     }
 
-    private function alias(int $householdId, string $entity, string $syncId): ?string
+    private function alias(int $scopeId, string $entity, string $syncId): ?string
     {
         $to = DB::table(Config::aliasesTable())
-            ->where('household_id', $householdId)
+            ->where('scope_id', $scopeId)
             ->where('entity', $entity)
             ->where('from_sync_id', $syncId)
             ->value('to_sync_id');
@@ -310,10 +310,10 @@ final readonly class PushApplier
         return is_string($to) ? $to : null;
     }
 
-    private function rememberAlias(int $householdId, string $entity, string $from, string $to): void
+    private function rememberAlias(int $scopeId, string $entity, string $from, string $to): void
     {
         DB::table(Config::aliasesTable())->insertOrIgnore([
-            'household_id' => $householdId,
+            'scope_id' => $scopeId,
             'entity' => $entity,
             'from_sync_id' => $from,
             'to_sync_id' => $to,
@@ -321,12 +321,12 @@ final readonly class PushApplier
         ]);
     }
 
-    private function recordClient(int $householdId, string $clientId, int $position): void
+    private function recordClient(int $scopeId, string $clientId, int $position): void
     {
-        $known = $this->lastPosition($householdId, $clientId);
+        $known = $this->lastPosition($scopeId, $clientId);
         $values = ['last_position' => max($known, $position), 'last_seen_at' => Date::now()];
 
-        DB::table(Config::clientsTable())->updateOrInsert(['household_id' => $householdId, 'client_id' => $clientId], $values);
+        DB::table(Config::clientsTable())->updateOrInsert(['scope_id' => $scopeId, 'client_id' => $clientId], $values);
     }
 
     private function syncIdOf(Model $model): string

@@ -1,6 +1,6 @@
 import type { SyncClient, SyncOutcome } from "./client";
 
-// When to sync (ADR §7.5): soon after a local write, at once on any other
+// When to sync: soon after a local write, at once on any other
 // trigger, and again after a failure with growing waits. Outcomes that need the
 // user or a new app version stop the retries until the next trigger.
 

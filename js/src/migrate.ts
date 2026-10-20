@@ -53,7 +53,7 @@ export const syncEngineSchemaV1 = `
     );
 
     CREATE TABLE IF NOT EXISTS sync_state (
-        household_id TEXT PRIMARY KEY NOT NULL,
+        scope_id TEXT PRIMARY KEY NOT NULL,
         cursor TEXT,
         snapshot_complete INTEGER NOT NULL DEFAULT 0,
         last_pull_at TEXT,
@@ -65,7 +65,7 @@ export const syncEngineSchemaV1 = `
     CREATE TABLE IF NOT EXISTS sync_outbox (
         position INTEGER PRIMARY KEY AUTOINCREMENT,
         change_id TEXT NOT NULL UNIQUE,
-        household_id TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
         entity TEXT NOT NULL,
         row_id TEXT NOT NULL,
         op TEXT NOT NULL,
@@ -77,11 +77,11 @@ export const syncEngineSchemaV1 = `
         created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS sync_outbox_row ON sync_outbox (entity, row_id);
-    CREATE INDEX IF NOT EXISTS sync_outbox_household ON sync_outbox (household_id, state, position);
+    CREATE INDEX IF NOT EXISTS sync_outbox_scope ON sync_outbox (scope_id, state, position);
 
     CREATE TABLE IF NOT EXISTS sync_rejected (
         change_id TEXT PRIMARY KEY NOT NULL,
-        household_id TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
         entity TEXT NOT NULL,
         row_id TEXT NOT NULL,
         op TEXT NOT NULL,

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Tests\Fixtures;
+namespace HardImpact\SyncEngine\Tests\Fixtures;
 
-use HardImpact\HouseholdSync\Push\SyncWrite;
-use HardImpact\HouseholdSync\SyncEntity;
+use HardImpact\SyncEngine\Push\SyncWrite;
+use HardImpact\SyncEngine\SyncEntity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
@@ -16,9 +16,9 @@ final class RoomEntity extends SyncEntity
         return 'rooms';
     }
 
-    public function query(int $householdId): Builder
+    public function query(int $scopeId): Builder
     {
-        return Room::query()->where('household_id', $householdId);
+        return Room::query()->where('scope_id', $scopeId);
     }
 
     public function row(Model $model): array
@@ -40,12 +40,12 @@ final class RoomEntity extends SyncEntity
     {
         $name = $write->fields['name'] ?? null;
 
-        return is_string($name) ? Room::query()->where('household_id', $write->householdId)->whereRaw('lower(name) = ?', [mb_strtolower($name)])->first() : null;
+        return is_string($name) ? Room::query()->where('scope_id', $write->scopeId)->whereRaw('lower(name) = ?', [mb_strtolower($name)])->first() : null;
     }
 
     public function upsert(SyncWrite $write): Model
     {
-        $room = $write->existing instanceof Room ? $write->existing : new Room(['household_id' => $write->householdId, 'sync_id' => $write->syncId]);
+        $room = $write->existing instanceof Room ? $write->existing : new Room(['scope_id' => $write->scopeId, 'sync_id' => $write->syncId]);
         $room->fill($write->fields)->save();
 
         return $room;

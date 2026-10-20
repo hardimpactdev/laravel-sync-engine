@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace HardImpact\HouseholdSync\Push;
+namespace HardImpact\SyncEngine\Push;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -18,7 +18,7 @@ final readonly class SyncWrite
      * @param  array<string, mixed>  $args
      */
     public function __construct(
-        public int $householdId,
+        public int $scopeId,
         public string $clientId,
         public string $syncId,
         public array $fields,
