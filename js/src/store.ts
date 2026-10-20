@@ -13,6 +13,8 @@ export type StoreOptions<T extends string> = {
     /** The synced tables. Each one is also the entity name on the wire. */
     tables: readonly T[];
     entities?: Partial<Record<T, EntitySpec>>;
+    /** The column of a synced row that holds its scope's sync_id. Default `scope_id`. */
+    scopeColumn?: string;
     newId: () => string;
     now?: () => string;
 };
@@ -80,16 +82,15 @@ export class MissingRowError extends Error {
     }
 }
 
-/** Columns every synced row has. The store and sync set them; a caller never does. */
-const conventions = new Set([
+/** Columns every synced row has, with the scope column. The store and sync set them; a caller never does. */
+const rowConventions = [
     "sync_id",
-    "scope_id",
     "server_id",
     "server_seq",
     "created_at",
     "updated_at",
     "deleted_at",
-]);
+];
 const plainName = /^[a-z][a-z0-9_]*$/;
 
 type Spec = {
@@ -221,15 +222,23 @@ export function createLocalStore<T extends string>(
 
 function createEngine<T extends string>(
     db: SqlDatabase,
-    { tables, entities = {}, newId, now = () => new Date().toISOString() }: StoreOptions<T>,
+    {
+        tables,
+        entities = {},
+        scopeColumn = "scope_id",
+        newId,
+        now = () => new Date().toISOString(),
+    }: StoreOptions<T>,
 ) {
+    if (!plainName.test(scopeColumn)) throw new Error(`${scopeColumn} is not a column name.`);
+    const conventions = new Set([...rowConventions, scopeColumn]);
     let depth = 0;
     const touched = new Set<string>();
     const versions = new Map<string, number>();
     const listeners = new Map<string, Set<() => void>>();
     const columnCache = new Map<string, Set<string>>();
 
-    const specs = resolveSpecs(tables, entities as Partial<Record<string, EntitySpec>>);
+    const specs = resolveSpecs(tables, entities as Partial<Record<string, EntitySpec>>, scopeColumn);
     // For each entity, the queued operations whose counters land on its rows.
     const countersOn = new Map<string, { source: string; op: string; counter: CounterSpec }[]>();
     for (const source of specs.values()) {
@@ -315,7 +324,7 @@ function createEngine<T extends string>(
         const synced: Row = {};
         for (const [column, value] of Object.entries(values)) {
             if (!plainName.test(column)) throw new Error(`${column} is not a column name.`);
-            if (column === "scope_id" && mode === "insert") continue;
+            if (column === scopeColumn && mode === "insert") continue;
             if (conventions.has(column)) throw new Error(`The store sets ${column} itself.`);
             if (column.startsWith("local_")) continue;
             if (entity.serverOwned.has(column)) {
@@ -531,7 +540,7 @@ function createEngine<T extends string>(
         const values: Row = {};
         for (const [column, value] of Object.entries(server)) {
             if (!known.has(column) || column.startsWith("local_")) continue;
-            if (["sync_id", "scope_id", "server_seq", "deleted_at"].includes(column)) continue;
+            if (["sync_id", scopeColumn, "server_seq", "deleted_at"].includes(column)) continue;
             values[column] = value;
         }
         let hidden = false;
@@ -559,7 +568,7 @@ function createEngine<T extends string>(
         } else {
             values.created_at ??= stamp;
             values.deleted_at = hidden ? stamp : null;
-            if (known.has("scope_id")) values.scope_id = scopeId;
+            if (known.has(scopeColumn)) values[scopeColumn] = scopeId;
             const names = ["sync_id", ...Object.keys(values)];
             db.run(
                 `INSERT INTO ${entity} (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})`,
@@ -601,9 +610,9 @@ function createEngine<T extends string>(
                 if (changes > 0) touch(source.name);
             }
             // Ids are unique, so a scope id in any table can only be this scope.
-            if (columns(source.name).has("scope_id")) {
+            if (columns(source.name).has(scopeColumn)) {
                 const { changes } = db.run(
-                    `UPDATE ${source.name} SET scope_id = ? WHERE scope_id = ?`,
+                    `UPDATE ${source.name} SET ${scopeColumn} = ? WHERE ${scopeColumn} = ?`,
                     [to, from],
                 );
                 if (changes > 0) touch(source.name);
@@ -650,7 +659,7 @@ function createEngine<T extends string>(
             spec(table);
             for (const column of Object.keys(values)) {
                 if (!plainName.test(column)) throw new Error(`${column} is not a column name.`);
-                if (conventions.has(column) && column !== "scope_id") {
+                if (conventions.has(column) && column !== scopeColumn) {
                     throw new Error(`The store sets ${column} itself.`);
                 }
             }
@@ -676,6 +685,7 @@ function createEngine<T extends string>(
         db,
         now,
         specs,
+        scopeColumn,
         versions,
         listeners,
         writer,
@@ -702,6 +712,7 @@ function createEngine<T extends string>(
 function resolveSpecs(
     tables: readonly string[],
     entities: Partial<Record<string, EntitySpec>>,
+    scopeColumn: string,
 ): Map<string, Spec> {
     const specs = new Map<string, Spec>();
     for (const table of tables) {
@@ -730,7 +741,10 @@ function resolveSpecs(
             counterFields: new Set(),
             scope:
                 entity.scope ??
-                ((values) => (typeof values.scope_id === "string" ? values.scope_id : null)),
+                ((values) => {
+                    const scope = values[scopeColumn];
+                    return typeof scope === "string" ? scope : null;
+                }),
         });
     }
     for (const [table, entity] of specs) {

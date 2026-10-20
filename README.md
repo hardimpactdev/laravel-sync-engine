@@ -255,8 +255,8 @@ resync_required` and pulls the scope again from the start.
 
 Give the store any synchronous SQLite binding that implements `SqlDatabase`
 (`exec`, `run`, `all`, `get`). Each synced table has the convention columns
-`sync_id`, `scope_id`, `server_id`, `server_seq`, `created_at`, `updated_at` and
-`deleted_at`. Columns that start with `local_` never sync.
+`sync_id`, the scope column, `server_id`, `server_seq`, `created_at`,
+`updated_at` and `deleted_at`. Columns that start with `local_` never sync.
 
 ```ts
 import { createLocalStore, createUlidFactory, migrate, syncEngineSchemaV1 } from "@hardimpactdev/laravel-sync-engine";
@@ -279,8 +279,10 @@ store.operate("counters", counterId, "adjust", { delta: 1 });
 store.remove("projects", id);
 ```
 
-A table without a `scope_id` column passes `scope: (row, db) => ...` in its
-entity spec to say which scope a row belongs to.
+The scope column is `scope_id` unless you pass `scopeColumn` (for example
+`"team_id"`), like `syncScopeColumn()` on the server. A table without that
+column, such as a child row, passes `scope: (row, db) => ...` in its entity spec
+to say which scope a row belongs to.
 
 ### Sync
 

@@ -248,8 +248,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     }
 
     function rowsOfScope(table: string): Row[] {
-        if (engine.columns(table).has("scope_id")) {
-            return engine.db.all<Row>(`SELECT * FROM ${table} WHERE scope_id = ?`, [scopeId]);
+        if (engine.columns(table).has(engine.scopeColumn)) {
+            return engine.db.all<Row>(`SELECT * FROM ${table} WHERE ${engine.scopeColumn} = ?`, [scopeId]);
         }
         const spec = engine.spec(table);
         return engine.db

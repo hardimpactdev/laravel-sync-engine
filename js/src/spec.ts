@@ -30,6 +30,6 @@ export type EntitySpec = {
     references?: Readonly<Record<string, string>>;
     /** Named operations, such as `adjust`. */
     operations?: Readonly<Record<string, OperationSpec>>;
-    /** The scope's sync_id for a row. Default: the row's `scope_id`. */
+    /** The scope's sync_id for a row. Default: the row's scope column (`scope_id`). */
     scope?: (row: Row, db: Pick<SqlDatabase, "get" | "all">) => string | null;
 };

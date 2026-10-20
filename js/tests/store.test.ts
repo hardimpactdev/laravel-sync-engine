@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MissingRowError } from "../src/store.ts";
-import { returnToPending, takeBatch } from "../src/sync.ts";
+import { createSyncClient } from "../src/client.ts";
+import { migrate, syncEngineSchemaV1 } from "../src/migrate.ts";
+import { createLocalStore, MissingRowError } from "../src/store.ts";
+import { applyPullPage, returnToPending, takeBatch } from "../src/sync.ts";
+import { memoryDatabase } from "./memory-database.ts";
 import { scope, outbox, pulled, setup, type Store } from "./setup.ts";
 
 function room(store: Store, name = "Kitchen") {
@@ -273,4 +276,51 @@ test("listeners hear about their tables once per commit", () => {
         local.put("counters", milk, { scope_id: scope, name: "Milk" }),
     );
     assert.deepEqual(heard.sort(), ["counters", "inventory", "outbox", "outbox", "outbox"]);
+});
+
+test("an app may keep the scope in a column of its own", async () => {
+    const db = memoryDatabase();
+    migrate(db, [
+        syncEngineSchemaV1,
+        `CREATE TABLE notes (
+            sync_id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL,
+            server_id INTEGER UNIQUE,
+            server_seq INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT,
+            title TEXT NOT NULL
+        )`,
+    ]);
+    let id = 0;
+    const store = createLocalStore(db, {
+        tables: ["notes"],
+        scopeColumn: "team_id",
+        newId: () => `ID${String(++id).padStart(4, "0")}`,
+    });
+
+    const note = store.insert("notes", { team_id: scope, title: "Plan" });
+    assert.deepEqual(JSON.parse(store.get<{ payload: string }>("SELECT payload FROM sync_outbox")!.payload), {
+        title: "Plan",
+    });
+    assert.equal(store.get<{ scope_id: string }>("SELECT scope_id FROM sync_outbox")?.scope_id, scope);
+    assert.throws(() => store.update("notes", note, { team_id: "OTHER" }), /The store sets team_id itself/);
+
+    applyPullPage(store, scope, {
+        changes: [{ entity: "notes", id: "PULLED", seq: 3, op: "upsert", row: { title: "From the web" } }],
+        cursor: "c1",
+        has_more: false,
+    });
+    assert.equal(store.get<{ team_id: string }>("SELECT team_id FROM notes WHERE sync_id = 'PULLED'")?.team_id, scope);
+
+    const client = createSyncClient({
+        store,
+        scopeId: scope,
+        clientId: "01JBC4Y0R8T5D8M4QKX3N2V6ZA",
+        entities: ["notes"],
+        transport: async () => ({ status: 404, body: null }),
+    });
+    assert.deepEqual(await client.sync(), { status: "gone", lostChanges: 1 });
+    assert.equal(store.get<{ count: number }>("SELECT COUNT(*) AS count FROM notes")?.count, 0);
 });
