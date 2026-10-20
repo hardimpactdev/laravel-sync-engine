@@ -8,7 +8,6 @@ use HardImpact\HouseholdSync\SyncEntity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
-/** @extends SyncEntity<Room> */
 final class RoomEntity extends SyncEntity
 {
     public function name(): string
@@ -23,6 +22,10 @@ final class RoomEntity extends SyncEntity
 
     public function row(Model $model): array
     {
-        return ['name' => $model->getAttribute('name')];
+        if (! $model instanceof Room) {
+            throw new \InvalidArgumentException('Expected a Room.');
+        }
+
+        return ['name' => $model->name];
     }
 }

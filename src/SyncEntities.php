@@ -4,16 +4,14 @@ declare(strict_types=1);
 
 namespace HardImpact\HouseholdSync;
 
-use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 
 /** The app's synced entities, registered in a service provider. */
 final class SyncEntities
 {
-    /** @var array<string, SyncEntity<Model>> */
+    /** @var array<string, SyncEntity> */
     private array $entities = [];
 
-    /** @param SyncEntity<Model> ...$entities */
     public function register(SyncEntity ...$entities): void
     {
         foreach ($entities as $entity) {
@@ -21,7 +19,6 @@ final class SyncEntities
         }
     }
 
-    /** @return SyncEntity<Model> */
     public function get(string $name): SyncEntity
     {
         return $this->entities[$name] ?? throw new InvalidArgumentException("No synced entity is called {$name}.");
