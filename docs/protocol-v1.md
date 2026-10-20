@@ -10,8 +10,10 @@ not breaking.
 ## 1. Ids and scope
 
 - Every synced row has a `sync_id`: a 26-character Crockford ULID in upper case,
-  made on the phone or the server. The wire format never carries server integer
-  ids.
+  made on the phone or the server. References between rows are always
+  `sync_id`s, never server integer ids. A pulled row may carry its own
+  `server_id` as a server-owned field, for apps that still call older REST
+  endpoints.
 - Every synced row belongs to one **household**. The household is the sync
   scope. Its id on the wire is the household's `sync_id`.
 - Every change has a `change_id`, a ULID made on the phone. It is the
