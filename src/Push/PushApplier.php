@@ -10,6 +10,7 @@ use HardImpact\HouseholdSync\SyncEntities;
 use HardImpact\HouseholdSync\SyncEntity;
 use HardImpact\HouseholdSync\Tombstones;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -87,6 +88,9 @@ final readonly class PushApplier
             $ack = $this->rejected($change, 'validation', $invalid->getMessage(), $this->current($householdId, $change), $fields);
         } catch (SyncRejection $rejection) {
             $ack = $this->rejected($change, $rejection->errorCode, $rejection->getMessage(), $this->current($householdId, $change));
+        } catch (UniqueConstraintViolationException) {
+            // For example an id that belongs to a row of another household.
+            $ack = $this->rejected($change, 'forbidden', 'This change conflicts with a row this device cannot change.', $this->current($householdId, $change));
         }
 
         DB::table(Config::receiptsTable())->insert([
