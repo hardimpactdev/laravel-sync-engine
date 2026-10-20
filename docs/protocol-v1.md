@@ -186,8 +186,9 @@ the app supplies the handlers.
 
 A spec may declare **match rules**. When an insert matches an existing row (for
 example a room with the same name), the server applies the change to that row
-and acks `applied` with `remap: {from: <device row id>, to: <server id>}`. The device
-rewrites every reference from `from` to `to` in one transaction.
+and acks `applied` with `remap: {from, to}`: the device's `sync_id` and the
+existing row's `sync_id`. The device rewrites every reference from `from` to
+`to` in one transaction.
 
 ### 5.4 Account merge
 

@@ -580,7 +580,8 @@ function createEngine<T extends string>(
 
     /**
      * The server matched a device row to one of its own. Every reference to the
-     * device id, in the tables and in unsent outbox entries, moves to the server id.
+     * device's sync_id, in the tables and in unsent outbox entries, moves to the
+     * server row's sync_id.
      * Entries the server may have seen keep their payload, so a resend stays the same.
      */
     function remap(entity: string, from: string, to: string) {

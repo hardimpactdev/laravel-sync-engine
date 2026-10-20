@@ -7,7 +7,8 @@ SQLite on the device.
   per-scope `change_seq`, serves a change feed after a cursor, applies pushed
   changes through your own domain code, and fires an event after each commit.
 - **Client half (npm):** a framework-agnostic TypeScript client over any
-  synchronous SQLite binding (expo-sqlite, node:sqlite, better-sqlite3). Every
+  synchronous SQLite binding (expo-sqlite, node:sqlite, better-sqlite3), behind
+  a four-method adapter. Every
   write goes through one store with an outbox. A sync client pushes the outbox
   and pulls the feed. A scheduler decides when to sync.
 - **React hooks (optional):** `useLocalQuery` reads local data and renders
@@ -49,10 +50,10 @@ them.
 
 ## Install
 
-Until the packages are published, install from GitHub:
+Until the packages are published, install from GitHub. Add the repository to
+your `composer.json`:
 
 ```json
-// composer.json
 "repositories": [{ "type": "vcs", "url": "https://github.com/hardimpactdev/laravel-sync-engine" }]
 ```
 
@@ -74,6 +75,9 @@ php artisan migrate
 ## Server
 
 ### Make a model sync
+
+The scope model itself (here `Team`) needs a unique `sync_id` ULID column: it is
+the scope's id on the wire and in the channel name. It does not need the trait.
 
 A synced table needs a unique `sync_id` (a ULID), a nullable `change_seq` and
 the column that holds the scope:
@@ -122,9 +126,10 @@ handlers call your own actions, so validation and side effects stay in your
 app.
 
 ```php
-use HardImpact\SyncEngine\Push\SyncRejection;
 use HardImpact\SyncEngine\Push\SyncWrite;
 use HardImpact\SyncEngine\SyncEntity;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 
 final class ProjectEntity extends SyncEntity
 {
@@ -205,6 +210,10 @@ nothing. The package does not broadcast it; your app sends the poke on the
 private channel `sync.{scope_sync_id}` as `scope.changed` (protocol §4):
 
 ```php
+use HardImpact\SyncEngine\Events\ScopeChanged;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+
 final class SyncPoke implements ShouldBroadcastNow
 {
     public function __construct(public string $scopeSyncId, public int $seq, public ?string $clientId) {}
@@ -228,6 +237,11 @@ final class SyncPoke implements ShouldBroadcastNow
 // In a service provider
 Event::listen(function (ScopeChanged $event) {
     $team = Team::find($event->scopeId);
+
+    if ($team === null) {
+        return; // the team was deleted in the same transaction
+    }
+
     broadcast(new SyncPoke($team->sync_id, $event->seq, $event->clientId));
 });
 
@@ -253,8 +267,24 @@ resync_required` and pulls the scope again from the start.
 
 ### Set up the store
 
-Give the store any synchronous SQLite binding that implements `SqlDatabase`
-(`exec`, `run`, `all`, `get`). Each synced table has the convention columns
+Wrap any synchronous SQLite binding in the four-method `SqlDatabase` adapter.
+For expo-sqlite:
+
+```ts
+import { openDatabaseSync } from "expo-sqlite";
+import type { SqlDatabase } from "@hardimpactdev/laravel-sync-engine";
+
+const sqlite = openDatabaseSync("app.db");
+const db: SqlDatabase = {
+    exec: (sql) => sqlite.execSync(sql),
+    run: (sql, params = []) => ({ changes: sqlite.runSync(sql, params).changes }),
+    all: (sql, params = []) => sqlite.getAllSync(sql, params),
+    get: (sql, params = []) => sqlite.getFirstSync(sql, params) ?? null,
+};
+```
+
+[`js/tests/memory-database.ts`](js/tests/memory-database.ts) does the same for
+node:sqlite. Each synced table has the convention columns
 `sync_id`, the scope column, `server_id`, `server_seq`, `created_at`,
 `updated_at` and `deleted_at`. Columns that start with `local_` never sync.
 
@@ -270,10 +300,11 @@ const store = createLocalStore(db, {
         projects: { references: { customer_id: "customers" }, serverOwned: ["archived_at"] },
         counters: { operations: { adjust: { counters: [{ field: "quantity", delta: "delta" }] } } },
     },
+    scopeColumn: "team_id",
     newId: createUlidFactory((count) => getRandomBytes(count)),
 });
 
-const id = store.insert("projects", { scope_id: teamId, name: "Launch" });
+const id = store.insert("projects", { team_id: teamId, name: "Launch" });
 store.update("projects", id, { name: "Launch v2" });
 store.operate("counters", counterId, "adjust", { delta: 1 });
 store.remove("projects", id);
@@ -338,8 +369,8 @@ function Projects() {
 
 ## Rules
 
-- **Write synced models only through Eloquent model events.** `saveQuietly`,
-  `withoutEvents`, query-builder writes (`Project::query()->update()`,
+- **Write synced models only through Eloquent, so model events fire.**
+  `saveQuietly`, `withoutEvents`, query-builder writes (`Project::query()->update()`,
   `DB::table('projects')->insert()`) and mass deletes skip the feed: devices
   never pull the change, and a delete leaves no tombstone. Load the models and
   save or delete them one by one.
