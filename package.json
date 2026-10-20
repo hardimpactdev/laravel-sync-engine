@@ -5,7 +5,8 @@
     "description": "Local-first sync for Expo apps: SQLite store with an outbox, sync client and realtime pokes.",
     "type": "module",
     "exports": {
-        ".": "./js/src/index.ts"
+        ".": "./js/src/index.ts",
+        "./react": "./js/src/react.ts"
     },
     "files": [
         "js/src",
@@ -14,5 +15,19 @@
     "scripts": {
         "test": "tsx --test js/tests/*.test.ts",
         "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@types/node": "^24.19.2",
+        "@types/react": "^19.3.0",
+        "tsx": "^4.23.15",
+        "typescript": "^7.0.2"
+    },
+    "peerDependencies": {
+        "react": ">=18"
+    },
+    "peerDependenciesMeta": {
+        "react": {
+            "optional": true
+        }
     }
 }
