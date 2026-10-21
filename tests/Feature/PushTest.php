@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 use HardImpact\SyncEngine\Events\ScopeChanged;
 use HardImpact\SyncEngine\Http\SyncEndpoint;
+use HardImpact\SyncEngine\Push\PushApplier;
+use HardImpact\SyncEngine\SyncSequence;
 use HardImpact\SyncEngine\Tests\Fixtures\Counter;
 use HardImpact\SyncEngine\Tests\Fixtures\Item;
 use HardImpact\SyncEngine\Tests\Fixtures\Room;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
@@ -202,4 +205,16 @@ it('rejects an id that belongs to a row of another scope', function (): void {
         ->assertJsonPath('acks.0.error.code', 'forbidden');
 
     expect($theirs->fresh()->name)->toBe('Theirs');
+});
+
+it('refuses a push inside a caller transaction until the scope has a state row', function (): void {
+    $apply = fn (): array => DB::transaction(fn (): array => app(PushApplier::class)->apply(9, PHONE, [
+        change(1, 'rooms', 100, 'upsert', ['fields' => ['name' => 'Kitchen']]),
+    ]));
+
+    expect($apply)->toThrow(LogicException::class, 'SyncSequence::ensure()');
+
+    SyncSequence::ensure(DB::connection(), 9);
+
+    expect($apply()[0]['status'])->toBe('applied');
 });

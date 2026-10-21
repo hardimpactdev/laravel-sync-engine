@@ -37,6 +37,19 @@ sync-engine-typescript keeps a copy that its CI checks against this one.
 ## Requirements
 
 - PHP 8.4+ and Laravel 13.
+- SQLite, MySQL, MariaDB or PostgreSQL. Each pull page reads in one
+  transaction that sees one snapshot: a deferred read transaction on SQLite
+  (use WAL mode, so pulls and writes do not block each other), REPEATABLE READ
+  on the others. On SQLite, `transaction_mode` IMMEDIATE or EXCLUSIVE makes
+  every pull take the write lock.
+- If you call the feed inside your own transaction, it keeps your isolation.
+  At READ COMMITTED or stronger no change is skipped, but a row's relations
+  may be newer than its seq. Use REPEATABLE READ for one snapshot.
+- Each push takes its scope's write lock before it reads, so concurrent pushes
+  wait for each other instead of failing or deadlocking. If you apply a push
+  inside your own transaction, call `SyncSequence::ensure($connection,
+  $scopeId)` before you open it, and on SQLite write before you read in it.
+  Without the state row the push throws.
 - On the device, [`@hardimpactdev/sync-engine`](https://github.com/hardimpactdev/sync-engine-typescript),
   or any client that speaks protocol v1.
 

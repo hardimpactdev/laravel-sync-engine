@@ -87,6 +87,8 @@ final readonly class SyncEndpoint
 
         $afterSeq = SyncCursor::decode($input['cursor'] ?? null, $scopeId);
 
+        // Checked before the push, so a stale cursor applies nothing. The page
+        // checks again inside its snapshot.
         if ($afterSeq > 0 && $afterSeq < SyncSequence::floor(DB::connection(), $scopeId)) {
             throw SyncRequestFailed::resyncRequired();
         }

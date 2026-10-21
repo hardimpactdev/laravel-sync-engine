@@ -7,6 +7,7 @@ namespace HardImpact\SyncEngine;
 use HardImpact\SyncEngine\Events\ScopeChanged;
 use Illuminate\Database\Connection;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Query\Expression;
 use LogicException;
 
 /**
@@ -35,16 +36,75 @@ final class SyncSequence
         }
 
         $table = Config::statesTable();
+        $query = $connection->table($table);
 
-        if ($connection->table($table)->where('scope_id', $scopeId)->increment('last_seq') === 0) {
-            $connection->table($table)->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]);
-            $connection->table($table)->where('scope_id', $scopeId)->increment('last_seq');
-        }
+        // Qualified, because PostgreSQL finds a bare last_seq ambiguous with
+        // excluded.last_seq. The table name comes from the package config.
+        $increment = $query->getGrammar()->wrap($table.'.last_seq').' + 1';
+
+        // One statement creates the row or bumps it. An UPDATE that finds no
+        // row and an INSERT after it would leave a gap lock between them on
+        // MySQL, and two first writes of new scopes could deadlock.
+        $query->upsert(
+            ['scope_id' => $scopeId, 'last_seq' => 1, 'floor_seq' => 0],
+            ['scope_id'],
+            ['last_seq' => new Expression($increment)], // @phpstan-ignore argument.type (config, not input)
+        );
 
         $seq = Config::int($connection->table($table)->where('scope_id', $scopeId)->value('last_seq'));
         self::announceAfterCommit($connection, $scopeId);
 
         return $seq;
+    }
+
+    /**
+     * Creates the scope's state row if it is missing, in its own commit.
+     *
+     * Call it before the transaction that calls lock(). The insert holds no
+     * lock past its commit. It can still be a deadlock victim on MySQL: when
+     * two inserts wait on another transaction's new row and that transaction
+     * rolls back, both take a shared lock and then need an exclusive one.
+     * MySQL leaves such a statement to the application to retry. The statement
+     * is idempotent, so the transaction runs it again on a deadlock, a lock
+     * timeout or a busy SQLite database, up to three times.
+     */
+    public static function ensure(ConnectionInterface $connection, int $scopeId): void
+    {
+        if ($connection->transactionLevel() > 0) {
+            throw new LogicException('The scope state row must be created outside a transaction. Call ensure() before the transaction begins.');
+        }
+
+        $connection->transaction(
+            fn () => $connection->table(Config::statesTable())->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]),
+            3,
+        );
+    }
+
+    /**
+     * Takes the scope's write lock now, before the transaction reads anything.
+     * The state row must exist: call ensure() before the transaction begins.
+     *
+     * On SQLite a deferred transaction that reads first and writes later fails
+     * with SQLITE_BUSY_SNAPSHOT when another connection commits in between;
+     * a busy timeout cannot help. A write as the first statement takes the
+     * database write lock on the latest snapshot, as BEGIN IMMEDIATE does, and
+     * waits for other writers through the busy timeout. On MySQL and
+     * PostgreSQL it takes the row lock that next() would take later, so
+     * concurrent pushes of one scope run one after the other.
+     */
+    public static function lock(ConnectionInterface $connection, int $scopeId): void
+    {
+        if ($connection->transactionLevel() === 0) {
+            throw new LogicException('The scope lock must be taken inside a transaction.');
+        }
+
+        $table = Config::statesTable();
+        $connection->table($table)->where('scope_id', $scopeId)->update(['last_seq' => $connection->raw('last_seq')]);
+
+        // A locking read sees the latest commit, also in an older snapshot.
+        if ($connection->table($table)->where('scope_id', $scopeId)->lockForUpdate()->value('scope_id') === null) {
+            throw new LogicException("Scope {$scopeId} has no sync state row. Call SyncSequence::ensure() before the transaction begins.");
+        }
     }
 
     /** Forgets what this process announced. For tests that reset the database. */
