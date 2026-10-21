@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace HardImpact\SyncEngine\Feed;
 
 use HardImpact\SyncEngine\Config;
+use HardImpact\SyncEngine\Exceptions\SyncRequestFailed;
 use HardImpact\SyncEngine\SyncEntities;
 use HardImpact\SyncEngine\SyncSequence;
 use HardImpact\SyncEngine\Tombstones;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 
@@ -16,11 +18,18 @@ use Illuminate\Support\Facades\DB;
  * in seq order. Each live row carries only its latest seq, so a row appears
  * once per page.
  *
- * Each entity is a separate query, so a write can commit between two of them.
- * The page therefore reads the scope's committed last_seq first and returns
- * only seqs at or below it. Seqs commit in order (see SyncSequence), so every
- * seq up to that bound is already visible, and a later write gets a seq above
- * it and comes in the next pull.
+ * The page reads from one snapshot: the floor, every entity, the relations
+ * that `row()` loads and the tombstones all see the same committed state. A
+ * write that commits during the page is not in it. Seqs commit in order (see
+ * SyncSequence), so the snapshot holds every seq up to its last_seq and none
+ * above it, and the next pull returns the write.
+ *
+ * The page also returns only seqs at or below that last_seq. Inside a
+ * snapshot this changes nothing. When the caller already holds a transaction,
+ * the page cannot choose its isolation, and the bound still keeps the cursor
+ * from passing a seq the page did not see.
+ *
+ * Synced models and the sync tables must use the default connection.
  */
 final readonly class SyncFeed
 {
@@ -29,50 +38,97 @@ final readonly class SyncFeed
     /** @param list<string> $entityNames */
     public function page(int $scopeId, array $entityNames, int $afterSeq, int $limit): FeedPage
     {
-        $changes = [];
-        $untilSeq = SyncSequence::committed(DB::connection(), $scopeId);
+        return self::snapshot(DB::connection(), function (Connection $connection) use ($scopeId, $entityNames, $afterSeq, $limit): FeedPage {
+            // The first read pins the snapshot.
+            $untilSeq = SyncSequence::committed($connection, $scopeId);
 
-        foreach ($entityNames as $name) {
-            $entity = $this->entities->get($name);
-            $query = $entity->query($scopeId);
-            $column = $query->getModel()->qualifyColumn('change_seq');
+            // A prune that commits before the snapshot has removed tombstones
+            // this cursor still needs.
+            if ($afterSeq > 0 && $afterSeq < SyncSequence::floor($connection, $scopeId)) {
+                throw SyncRequestFailed::resyncRequired();
+            }
 
-            $query->where($column, '>', $afterSeq)->where($column, '<=', $untilSeq)->orderBy($column)->limit($limit + 1)
-                ->get()
-                ->each(function (Model $model) use (&$changes, $entity, $name): void {
-                    $changes[] = new FeedChange(
-                        $name,
-                        self::string($model->getAttribute('sync_id')),
-                        Config::int($model->getAttribute('change_seq')),
-                        'upsert',
-                        $entity->row($model),
-                    );
-                });
+            $changes = [];
+
+            foreach ($entityNames as $name) {
+                $entity = $this->entities->get($name);
+                $query = $entity->query($scopeId);
+                $column = $query->getModel()->qualifyColumn('change_seq');
+
+                // row() runs here, so relations it loads come from the snapshot too.
+                $query->where($column, '>', $afterSeq)->where($column, '<=', $untilSeq)->orderBy($column)->limit($limit + 1)
+                    ->get()
+                    ->each(function (Model $model) use (&$changes, $entity, $name): void {
+                        $changes[] = new FeedChange(
+                            $name,
+                            self::string($model->getAttribute('sync_id')),
+                            Config::int($model->getAttribute('change_seq')),
+                            'upsert',
+                            $entity->row($model),
+                        );
+                    });
+            }
+
+            // A first pull has nothing to delete.
+            if ($afterSeq > 0 && $entityNames !== []) {
+                $connection->table(Tombstones::table())
+                    ->where('scope_id', $scopeId)
+                    ->whereIn('entity', $entityNames)
+                    ->where('change_seq', '>', $afterSeq)
+                    ->where('change_seq', '<=', $untilSeq)
+                    ->orderBy('change_seq')
+                    ->limit($limit + 1)
+                    ->get(['entity', 'sync_id', 'change_seq'])
+                    ->each(function (object $tombstone) use (&$changes): void {
+                        /** @var object{entity: string, sync_id: string, change_seq: int|string} $tombstone */
+                        $changes[] = new FeedChange($tombstone->entity, $tombstone->sync_id, Config::int($tombstone->change_seq), 'delete');
+                    });
+            }
+
+            usort($changes, fn (FeedChange $a, FeedChange $b): int => $a->seq <=> $b->seq);
+
+            $hasMore = count($changes) > $limit;
+            $changes = array_slice($changes, 0, $limit);
+            $lastSeq = $changes === [] ? $afterSeq : $changes[array_key_last($changes)]->seq;
+
+            return new FeedPage($changes, $lastSeq, $hasMore);
+        });
+    }
+
+    /**
+     * Runs `$read` in one transaction that sees one snapshot.
+     *
+     * - SQLite: a deferred transaction takes its snapshot at its first read and
+     *   keeps it until commit. In WAL mode it blocks no writer. A connection
+     *   with `transaction_mode` IMMEDIATE or EXCLUSIVE takes the write lock
+     *   for the page instead: still correct, but writers wait.
+     * - MySQL and MariaDB: REPEATABLE READ, set for the next transaction. The
+     *   snapshot starts at the first read.
+     * - PostgreSQL: REPEATABLE READ, set before the first read.
+     *
+     * Inside a caller's transaction the isolation is the caller's.
+     *
+     * @param  \Closure(Connection): FeedPage  $read
+     */
+    private static function snapshot(Connection $connection, \Closure $read): FeedPage
+    {
+        if ($connection->transactionLevel() > 0) {
+            return $read($connection);
         }
 
-        // A first pull has nothing to delete.
-        if ($afterSeq > 0 && $entityNames !== []) {
-            DB::table(Tombstones::table())
-                ->where('scope_id', $scopeId)
-                ->whereIn('entity', $entityNames)
-                ->where('change_seq', '>', $afterSeq)
-                ->where('change_seq', '<=', $untilSeq)
-                ->orderBy('change_seq')
-                ->limit($limit + 1)
-                ->get(['entity', 'sync_id', 'change_seq'])
-                ->each(function (object $tombstone) use (&$changes): void {
-                    /** @var object{entity: string, sync_id: string, change_seq: int|string} $tombstone */
-                    $changes[] = new FeedChange($tombstone->entity, $tombstone->sync_id, Config::int($tombstone->change_seq), 'delete');
-                });
+        $driver = $connection->getDriverName();
+
+        if ($driver === 'mysql' || $driver === 'mariadb') {
+            $connection->unprepared('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
         }
 
-        usort($changes, fn (FeedChange $a, FeedChange $b): int => $a->seq <=> $b->seq);
+        return $connection->transaction(function () use ($connection, $driver, $read): FeedPage {
+            if ($driver === 'pgsql') {
+                $connection->unprepared('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            }
 
-        $hasMore = count($changes) > $limit;
-        $changes = array_slice($changes, 0, $limit);
-        $lastSeq = $changes === [] ? $afterSeq : $changes[array_key_last($changes)]->seq;
-
-        return new FeedPage($changes, $lastSeq, $hasMore);
+            return $read($connection);
+        });
     }
 
     private static function string(mixed $value): string

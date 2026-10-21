@@ -37,6 +37,11 @@ sync-engine-typescript keeps a copy that its CI checks against this one.
 ## Requirements
 
 - PHP 8.4+ and Laravel 13.
+- SQLite, MySQL, MariaDB or PostgreSQL. Each pull page reads in one
+  transaction that sees one snapshot: a deferred read transaction on SQLite
+  (use WAL mode, so pulls and writes do not block each other), REPEATABLE READ
+  on the others. On SQLite, `transaction_mode` IMMEDIATE or EXCLUSIVE makes
+  every pull take the write lock.
 - On the device, [`@hardimpactdev/sync-engine`](https://github.com/hardimpactdev/sync-engine-typescript),
   or any client that speaks protocol v1.
 
