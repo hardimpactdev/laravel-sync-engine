@@ -59,4 +59,4 @@ jobs:
                   extensions: pdo_pgsql, pdo_mysql, pcntl, posix
                   coverage: none
             - run: composer install --no-interaction --no-progress
-            - run: vendor/bin/pest --testsuite=Concurrent
+            - run: vendor/bin/pest --parallel --testsuite=Concurrent
