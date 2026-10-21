@@ -26,6 +26,7 @@ jobs:
     concurrent:
         runs-on: ubuntu-latest
         strategy:
+            fail-fast: false
             matrix:
                 db: [pgsql, mysql]
         services:
@@ -35,7 +36,7 @@ jobs:
                     POSTGRES_PASSWORD: secret
                     POSTGRES_DB: sync_engine
                 ports: ['5432:5432']
-                options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+                options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
             mysql:
                 image: mysql:8.4
                 env:

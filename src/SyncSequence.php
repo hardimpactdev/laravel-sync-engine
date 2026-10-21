@@ -35,11 +35,16 @@ final class SyncSequence
         }
 
         $table = Config::statesTable();
+        $query = $connection->table($table);
 
-        if ($connection->table($table)->where('scope_id', $scopeId)->increment('last_seq') === 0) {
-            $connection->table($table)->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]);
-            $connection->table($table)->where('scope_id', $scopeId)->increment('last_seq');
-        }
+        // One statement creates the row or bumps it. An UPDATE that finds no
+        // row and an INSERT after it would leave a gap lock between them on
+        // MySQL, and two first writes of new scopes could deadlock.
+        $query->upsert(
+            ['scope_id' => $scopeId, 'last_seq' => 1, 'floor_seq' => 0],
+            ['scope_id'],
+            ['last_seq' => $connection->raw($query->getGrammar()->wrap($table.'.last_seq').' + 1')],
+        );
 
         $seq = Config::int($connection->table($table)->where('scope_id', $scopeId)->value('last_seq'));
         self::announceAfterCommit($connection, $scopeId);
@@ -48,7 +53,24 @@ final class SyncSequence
     }
 
     /**
+     * Creates the scope's state row if it is missing, in its own commit.
+     *
+     * Call it before the transaction that calls lock(). Outside a transaction
+     * the insert holds no lock past its own commit, so concurrent first
+     * pushes of a scope cannot deadlock on it.
+     */
+    public static function ensure(ConnectionInterface $connection, int $scopeId): void
+    {
+        if ($connection->transactionLevel() > 0) {
+            throw new LogicException('The scope state row must be created outside a transaction. Call ensure() before the transaction begins.');
+        }
+
+        $connection->table(Config::statesTable())->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]);
+    }
+
+    /**
      * Takes the scope's write lock now, before the transaction reads anything.
+     * The state row must exist: call ensure() before the transaction begins.
      *
      * On SQLite a deferred transaction that reads first and writes later fails
      * with SQLITE_BUSY_SNAPSHOT when another connection commits in between;
@@ -65,11 +87,11 @@ final class SyncSequence
         }
 
         $table = Config::statesTable();
-        $touch = ['last_seq' => $connection->raw('last_seq')];
+        $connection->table($table)->where('scope_id', $scopeId)->update(['last_seq' => $connection->raw('last_seq')]);
 
-        if ($connection->table($table)->where('scope_id', $scopeId)->update($touch) === 0) {
-            $connection->table($table)->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]);
-            $connection->table($table)->where('scope_id', $scopeId)->update($touch);
+        // A locking read sees the latest commit, also in an older snapshot.
+        if ($connection->table($table)->where('scope_id', $scopeId)->lockForUpdate()->value('scope_id') === null) {
+            throw new LogicException("Scope {$scopeId} has no sync state row. Call SyncSequence::ensure() before the transaction begins.");
         }
     }
 

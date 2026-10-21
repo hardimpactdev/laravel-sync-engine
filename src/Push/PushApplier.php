@@ -33,6 +33,12 @@ final readonly class PushApplier
      */
     public function apply(int $scopeId, string $clientId, array $changes): array
     {
+        // In its own commit, before the transaction. Inside a caller's
+        // transaction the row must already exist; lock() says so if not.
+        if (DB::transactionLevel() === 0) {
+            SyncSequence::ensure(DB::connection(), $scopeId);
+        }
+
         return SyncSequence::asClient($clientId, fn (): array => DB::transaction(function () use ($scopeId, $clientId, $changes): array {
             // Before the first read, so the push never upgrades a stale read
             // to a write.

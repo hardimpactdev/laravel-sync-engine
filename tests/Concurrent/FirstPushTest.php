@@ -17,9 +17,9 @@ beforeEach(function (): void {
  * Runs `$work(1)` here and `$work(2)` in a forked process at the same time,
  * and returns both results. The forked process uses its own connection.
  *
- * After its first write to sync_states, each process waits up to a second for
- * the other to get as far. Both then hold what they took first, which is when
- * first writes of a scope used to deadlock on MySQL.
+ * After its first write to sync_states in a transaction, each process waits up
+ * to a second for the other to get as far. Both then hold what they took
+ * first, which is when first writes of a scope used to deadlock on MySQL.
  *
  * @param  Closure(int): mixed  $work
  * @return array{0: mixed, 1: mixed}
@@ -38,7 +38,7 @@ function inTwoProcesses(Closure $work): array
     DB::listen(function (QueryExecuted $query) use (&$arrived, $dir): void {
         $sql = str_replace(['"', '`'], '', $query->sql);
 
-        if ($arrived || $query->connectionName !== DB::getDefaultConnection() || ! preg_match('/^(update|insert into) sync_states /', $sql)) {
+        if ($arrived || $query->connectionName !== DB::getDefaultConnection() || DB::transactionLevel() === 0 || ! preg_match('/^(update|insert into) sync_states /', $sql)) {
             return;
         }
 
