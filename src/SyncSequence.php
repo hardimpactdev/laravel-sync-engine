@@ -40,7 +40,6 @@ final class SyncSequence
 
         // Qualified, because PostgreSQL finds a bare last_seq ambiguous with
         // excluded.last_seq. The table name comes from the package config.
-        /** @var literal-string $increment */
         $increment = $query->getGrammar()->wrap($table.'.last_seq').' + 1';
 
         // One statement creates the row or bumps it. An UPDATE that finds no
@@ -49,7 +48,7 @@ final class SyncSequence
         $query->upsert(
             ['scope_id' => $scopeId, 'last_seq' => 1, 'floor_seq' => 0],
             ['scope_id'],
-            ['last_seq' => new Expression($increment)],
+            ['last_seq' => new Expression($increment)], // @phpstan-ignore argument.type (config, not input)
         );
 
         $seq = Config::int($connection->table($table)->where('scope_id', $scopeId)->value('last_seq'));
