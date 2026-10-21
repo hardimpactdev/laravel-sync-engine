@@ -293,3 +293,20 @@ resync_required` and pulls the scope again from the start.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Parallel tests
+
+`composer test` runs Pest with `--parallel`; ParaTest detects the CPU allocation.
+Feature tests use in-memory SQLite. Concurrent SQLite tests create private
+`tempnam` files in WAL mode. For PostgreSQL and MySQL, each ParaTest worker uses
+`DB_DATABASE_test_TEST_TOKEN` (the final component is its numeric worker token).
+The disposable CI database user must be allowed to create these databases.
+Both connections inside a concurrency test use that worker's database, so the
+row-lock and transaction assertions retain their production meaning. A worker
+may drop its own tables without touching another worker. CI's service cluster
+is discarded with the job.
+
+The small suite needs no shard matrix. Both `composer test -- --shard=N/M` and
+`vendor/bin/pest --parallel --testsuite=Concurrent --shard=N/M` use stock Pest
+sharding. Keep any future count only in the CI matrix. Use `--processes=4` for
+focused checks on a busy development host.
