@@ -20,3 +20,42 @@ jobs:
                   coverage: none
             - run: composer install --no-interaction --no-progress
             - run: composer check
+
+    # The two-connection suite on servers, where a caller's transaction can
+    # run at READ COMMITTED.
+    concurrent:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                db: [pgsql, mysql]
+        services:
+            postgres:
+                image: postgres:17
+                env:
+                    POSTGRES_PASSWORD: secret
+                    POSTGRES_DB: sync_engine
+                ports: ['5432:5432']
+                options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ROOT_PASSWORD: secret
+                    MYSQL_DATABASE: sync_engine
+                ports: ['3306:3306']
+                options: --health-cmd "mysqladmin ping -psecret" --health-interval 5s --health-timeout 5s --health-retries 20
+        env:
+            DB_DRIVER: ${{ matrix.db }}
+            DB_HOST: 127.0.0.1
+            DB_PORT: ${{ matrix.db == 'pgsql' && '5432' || '3306' }}
+            DB_DATABASE: sync_engine
+            DB_USERNAME: ${{ matrix.db == 'pgsql' && 'postgres' || 'root' }}
+            DB_PASSWORD: secret
+        steps:
+            - uses: actions/checkout@v5
+            - uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.5'
+                  extensions: pdo_pgsql, pdo_mysql
+                  coverage: none
+            - run: composer install --no-interaction --no-progress
+            - run: vendor/bin/pest --testsuite=Concurrent
