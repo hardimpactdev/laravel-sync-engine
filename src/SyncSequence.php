@@ -38,13 +38,18 @@ final class SyncSequence
         $table = Config::statesTable();
         $query = $connection->table($table);
 
+        // Qualified, because PostgreSQL finds a bare last_seq ambiguous with
+        // excluded.last_seq. The table name comes from the package config.
+        /** @var literal-string $increment */
+        $increment = $query->getGrammar()->wrap($table.'.last_seq').' + 1';
+
         // One statement creates the row or bumps it. An UPDATE that finds no
         // row and an INSERT after it would leave a gap lock between them on
         // MySQL, and two first writes of new scopes could deadlock.
         $query->upsert(
             ['scope_id' => $scopeId, 'last_seq' => 1, 'floor_seq' => 0],
             ['scope_id'],
-            ['last_seq' => new Expression($query->getGrammar()->wrap($table.'.last_seq').' + 1')],
+            ['last_seq' => new Expression($increment)],
         );
 
         $seq = Config::int($connection->table($table)->where('scope_id', $scopeId)->value('last_seq'));
