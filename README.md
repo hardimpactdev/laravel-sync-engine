@@ -13,8 +13,6 @@ an event after each commit that you broadcast as a real-time poke.
 A **scope** is the unit that syncs together and that a user may read: a team, a
 household, a workspace. Your app decides what a scope is and who may read it.
 
-> **Status:** pre-release. The package is not on Packagist yet.
-
 ## How it works
 
 1. The device writes a row and its outbox entry in one SQLite transaction.
@@ -44,15 +42,10 @@ sync-engine-typescript keeps a copy that its CI checks against this one.
 
 ## Install
 
-Until the package is published, install it from GitHub. Add the repository to
-your `composer.json`:
-
-```json
-"repositories": [{ "type": "vcs", "url": "https://github.com/hardimpactdev/sync-engine-laravel" }]
-```
+Install the package from Packagist. Composer adds it as `^0.1`:
 
 ```sh
-composer require hardimpactdev/sync-engine:dev-main
+composer require hardimpactdev/sync-engine
 ```
 
 The service provider registers itself. It loads the engine's migrations, which
