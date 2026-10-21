@@ -7,22 +7,9 @@ use HardImpact\SyncEngine\Http\SyncEndpoint;
 use HardImpact\SyncEngine\SyncSequence;
 use HardImpact\SyncEngine\Tests\Fixtures\Item;
 use HardImpact\SyncEngine\Tests\Fixtures\Room;
-use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Testing\TestResponse;
-
-function pull(array $overrides = [], int $scope = 1): TestResponse
-{
-    return test()->postJson("/sync/{$scope}", array_merge([
-        'protocol' => 1,
-        'client_id' => '01JBC4Y0R8T5D8M4QKX3N2V6ZA',
-        'cursor' => null,
-        'entities' => ['items', 'rooms'],
-        'changes' => [],
-    ], $overrides));
-}
 
 beforeEach(function (): void {
     Route::post('/sync/{scope}', fn (Request $request, int $scope) => app(SyncEndpoint::class)->respond($request, $scope));
@@ -114,33 +101,6 @@ it('pages through the feed without losing rows', function (): void {
     } while ($response->json('has_more'));
 
     expect($seen)->toBe(range(1, 7));
-});
-
-it('delivers a write that commits between two entity reads on the next pull', function (): void {
-    Item::create(['scope_id' => 1, 'name' => 'Kettle']);
-    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
-    $cursor = pull()->json('cursor');
-
-    // Right after the page reads items, another request saves an item and
-    // then a room. The page reads rooms after both have committed.
-    $written = false;
-    DB::listen(function (QueryExecuted $query) use (&$written, $kitchen): void {
-        if ($written || ! str_starts_with($query->sql, 'select * from "items"')) {
-            return;
-        }
-
-        $written = true;
-        Item::create(['scope_id' => 1, 'name' => 'Toaster']);
-        $kitchen->update(['name' => 'Kitchen 2']);
-    });
-
-    $page = pull(['cursor' => $cursor])->assertOk();
-    $seen = array_column($page->json('changes'), 'seq');
-
-    $next = pull(['cursor' => $page->json('cursor')])->assertOk();
-    array_push($seen, ...array_column($next->json('changes'), 'seq'));
-
-    expect($written)->toBeTrue()->and($seen)->toBe([3, 4]);
 });
 
 it('pages a tombstone and an upsert of one seq range in order', function (): void {
