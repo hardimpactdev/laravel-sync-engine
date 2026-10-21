@@ -34,6 +34,10 @@ final readonly class PushApplier
     public function apply(int $scopeId, string $clientId, array $changes): array
     {
         return SyncSequence::asClient($clientId, fn (): array => DB::transaction(function () use ($scopeId, $clientId, $changes): array {
+            // Before the first read, so the push never upgrades a stale read
+            // to a write.
+            SyncSequence::lock(DB::connection(), $scopeId);
+
             $acks = [];
             $position = 0;
 

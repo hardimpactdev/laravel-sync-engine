@@ -24,10 +24,14 @@ use Illuminate\Support\Facades\DB;
  * SyncSequence), so the snapshot holds every seq up to its last_seq and none
  * above it, and the next pull returns the write.
  *
- * The page also returns only seqs at or below that last_seq. Inside a
- * snapshot this changes nothing. When the caller already holds a transaction,
- * the page cannot choose its isolation, and the bound still keeps the cursor
- * from passing a seq the page did not see.
+ * The page also returns only seqs at or below that last_seq, and checks
+ * floor_seq after it reads the tombstones. Inside a snapshot both change
+ * nothing. When the caller already holds a transaction, the page cannot
+ * choose its isolation. At READ COMMITTED each read sees the latest commits:
+ * the bound keeps the cursor from passing a seq the page did not see, and the
+ * late floor check catches a prune that removed tombstones during the page.
+ * So no change is skipped. Relations that `row()` loads may then be newer
+ * than the row's seq; the newer change comes in a later pull.
  *
  * Synced models and the sync tables must use the default connection.
  */
@@ -41,13 +45,6 @@ final readonly class SyncFeed
         return self::snapshot(DB::connection(), function (Connection $connection) use ($scopeId, $entityNames, $afterSeq, $limit): FeedPage {
             // The first read pins the snapshot.
             $untilSeq = SyncSequence::committed($connection, $scopeId);
-
-            // A prune that commits before the snapshot has removed tombstones
-            // this cursor still needs.
-            if ($afterSeq > 0 && $afterSeq < SyncSequence::floor($connection, $scopeId)) {
-                throw SyncRequestFailed::resyncRequired();
-            }
-
             $changes = [];
 
             foreach ($entityNames as $name) {
@@ -85,6 +82,14 @@ final readonly class SyncFeed
                     });
             }
 
+            // Read after the tombstones. A prune deletes tombstones and raises
+            // floor_seq in one commit, so if the read above missed tombstones
+            // this cursor needs, this read sees the raised floor. That holds
+            // without a snapshot too, at READ COMMITTED.
+            if ($afterSeq > 0 && $afterSeq < SyncSequence::floor($connection, $scopeId)) {
+                throw SyncRequestFailed::resyncRequired();
+            }
+
             usort($changes, fn (FeedChange $a, FeedChange $b): int => $a->seq <=> $b->seq);
 
             $hasMore = count($changes) > $limit;
@@ -106,7 +111,8 @@ final readonly class SyncFeed
      *   snapshot starts at the first read.
      * - PostgreSQL: REPEATABLE READ, set before the first read.
      *
-     * Inside a caller's transaction the isolation is the caller's.
+     * Inside a caller's transaction the isolation is the caller's. The page
+     * stays correct at READ COMMITTED or stronger (see the class comment).
      *
      * @param  \Closure(Connection): FeedPage  $read
      */

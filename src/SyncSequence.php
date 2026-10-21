@@ -47,6 +47,32 @@ final class SyncSequence
         return $seq;
     }
 
+    /**
+     * Takes the scope's write lock now, before the transaction reads anything.
+     *
+     * On SQLite a deferred transaction that reads first and writes later fails
+     * with SQLITE_BUSY_SNAPSHOT when another connection commits in between;
+     * a busy timeout cannot help. A write as the first statement takes the
+     * database write lock on the latest snapshot, as BEGIN IMMEDIATE does, and
+     * waits for other writers through the busy timeout. On MySQL and
+     * PostgreSQL it takes the row lock that next() would take later, so
+     * concurrent pushes of one scope run one after the other.
+     */
+    public static function lock(ConnectionInterface $connection, int $scopeId): void
+    {
+        if ($connection->transactionLevel() === 0) {
+            throw new LogicException('The scope lock must be taken inside a transaction.');
+        }
+
+        $table = Config::statesTable();
+        $touch = ['last_seq' => $connection->raw('last_seq')];
+
+        if ($connection->table($table)->where('scope_id', $scopeId)->update($touch) === 0) {
+            $connection->table($table)->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]);
+            $connection->table($table)->where('scope_id', $scopeId)->update($touch);
+        }
+    }
+
     /** Forgets what this process announced. For tests that reset the database. */
     public static function flushState(): void
     {
