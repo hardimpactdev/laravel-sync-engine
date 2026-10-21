@@ -7,6 +7,7 @@ use HardImpact\SyncEngine\Http\SyncEndpoint;
 use HardImpact\SyncEngine\SyncSequence;
 use HardImpact\SyncEngine\Tests\Fixtures\Item;
 use HardImpact\SyncEngine\Tests\Fixtures\Room;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
@@ -113,6 +114,49 @@ it('pages through the feed without losing rows', function (): void {
     } while ($response->json('has_more'));
 
     expect($seen)->toBe(range(1, 7));
+});
+
+it('delivers a write that commits between two entity reads on the next pull', function (): void {
+    Item::create(['scope_id' => 1, 'name' => 'Kettle']);
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    $cursor = pull()->json('cursor');
+
+    // Right after the page reads items, another request saves an item and
+    // then a room. The page reads rooms after both have committed.
+    $written = false;
+    DB::listen(function (QueryExecuted $query) use (&$written, $kitchen): void {
+        if ($written || ! str_starts_with($query->sql, 'select * from "items"')) {
+            return;
+        }
+
+        $written = true;
+        Item::create(['scope_id' => 1, 'name' => 'Toaster']);
+        $kitchen->update(['name' => 'Kitchen 2']);
+    });
+
+    $page = pull(['cursor' => $cursor])->assertOk();
+    $seen = array_column($page->json('changes'), 'seq');
+
+    $next = pull(['cursor' => $page->json('cursor')])->assertOk();
+    array_push($seen, ...array_column($next->json('changes'), 'seq'));
+
+    expect($written)->toBeTrue()->and($seen)->toBe([3, 4]);
+});
+
+it('pages a tombstone and an upsert of one seq range in order', function (): void {
+    $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    $cursor = pull()->json('cursor');
+
+    $kettle->delete();
+    $kitchen->update(['name' => 'Kitchen 2']);
+    Item::create(['scope_id' => 1, 'name' => 'Toaster']);
+
+    $first = pull(['cursor' => $cursor, 'limit' => 2])->assertOk()->assertJsonPath('has_more', true);
+    $second = pull(['cursor' => $first->json('cursor'), 'limit' => 2])->assertOk()->assertJsonPath('has_more', false);
+
+    expect(array_column($first->json('changes'), 'op'))->toBe(['delete', 'upsert'])
+        ->and(array_column([...$first->json('changes'), ...$second->json('changes')], 'seq'))->toBe([3, 4, 5]);
 });
 
 it('sends deletes as tombstones and soft deletes the same way', function (): void {

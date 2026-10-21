@@ -54,6 +54,17 @@ final class SyncSequence
         self::$clientId = null;
     }
 
+    /**
+     * The scope's highest committed seq. Every seq at or below it has committed,
+     * because a write holds the counter's lock until it commits.
+     */
+    public static function committed(ConnectionInterface $connection, int $scopeId): int
+    {
+        $seq = $connection->table(Config::statesTable())->where('scope_id', $scopeId)->value('last_seq');
+
+        return $seq === null ? 0 : Config::int($seq);
+    }
+
     public static function floor(ConnectionInterface $connection, int $scopeId): int
     {
         $floor = $connection->table(Config::statesTable())->where('scope_id', $scopeId)->value('floor_seq');
