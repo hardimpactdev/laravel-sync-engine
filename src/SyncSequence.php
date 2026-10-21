@@ -7,6 +7,7 @@ namespace HardImpact\SyncEngine;
 use HardImpact\SyncEngine\Events\ScopeChanged;
 use Illuminate\Database\Connection;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Query\Expression;
 use LogicException;
 
 /**
@@ -43,7 +44,7 @@ final class SyncSequence
         $query->upsert(
             ['scope_id' => $scopeId, 'last_seq' => 1, 'floor_seq' => 0],
             ['scope_id'],
-            ['last_seq' => $connection->raw($query->getGrammar()->wrap($table.'.last_seq').' + 1')],
+            ['last_seq' => new Expression($query->getGrammar()->wrap($table.'.last_seq').' + 1')],
         );
 
         $seq = Config::int($connection->table($table)->where('scope_id', $scopeId)->value('last_seq'));
