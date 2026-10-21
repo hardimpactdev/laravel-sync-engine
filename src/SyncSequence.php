@@ -60,9 +60,13 @@ final class SyncSequence
     /**
      * Creates the scope's state row if it is missing, in its own commit.
      *
-     * Call it before the transaction that calls lock(). Outside a transaction
-     * the insert holds no lock past its own commit, so concurrent first
-     * pushes of a scope cannot deadlock on it.
+     * Call it before the transaction that calls lock(). The insert holds no
+     * lock past its commit. It can still be a deadlock victim on MySQL: when
+     * two inserts wait on another transaction's new row and that transaction
+     * rolls back, both take a shared lock and then need an exclusive one.
+     * MySQL leaves such a statement to the application to retry. The statement
+     * is idempotent, so the transaction runs it again on a deadlock, a lock
+     * timeout or a busy SQLite database, up to three times.
      */
     public static function ensure(ConnectionInterface $connection, int $scopeId): void
     {
@@ -70,7 +74,10 @@ final class SyncSequence
             throw new LogicException('The scope state row must be created outside a transaction. Call ensure() before the transaction begins.');
         }
 
-        $connection->table(Config::statesTable())->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]);
+        $connection->transaction(
+            fn () => $connection->table(Config::statesTable())->insertOrIgnore(['scope_id' => $scopeId, 'last_seq' => 0, 'floor_seq' => 0]),
+            3,
+        );
     }
 
     /**
