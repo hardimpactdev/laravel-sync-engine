@@ -21,8 +21,8 @@ use Illuminate\Validation\ValidationException;
  * one transaction, so it commits, and pokes, once.
  *
  * A change may propose ids for the rows its action makes (§5.5). The batch
- * keeps the proposed ids whose row was not made, and refuses later changes
- * that need them.
+ * keeps the proposed ids that reach no row, and refuses later changes that
+ * need them.
  *
  * @phpstan-type Change array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int, proposals?: array<string, string>}
  * @phpstan-type Ack array<string, mixed>
@@ -50,7 +50,7 @@ final readonly class PushApplier
 
             $acks = [];
             $position = 0;
-            $proposed = new ProposedIds;
+            $proposed = new ProposedIds($scopeId);
 
             foreach ($changes as $change) {
                 $ack = $this->applyOne($scopeId, $clientId, $change, $proposed);

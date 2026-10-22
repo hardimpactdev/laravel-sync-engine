@@ -81,9 +81,13 @@ final readonly class SyncEndpoint
 
         // On the raw input: the validator rewrites dots in keys.
         $validator->after(function (ValidatorContract $validator) use ($request): void {
+            $seen = [];
+
             foreach ((array) $request->input('changes') as $index => $change) {
-                if (! $this->validProposals(is_array($change) ? ($change['proposals'] ?? []) : [])) {
-                    $validator->errors()->add("changes.{$index}.proposals", 'Each proposal maps a key to a ULID.');
+                $proposals = is_array($change) ? ($change['proposals'] ?? []) : [];
+
+                if (! $this->validProposals($proposals, $seen)) {
+                    $validator->errors()->add("changes.{$index}.proposals", 'Each proposal maps a key to a ULID that no other proposal of the batch has.');
                 }
             }
         });
@@ -129,17 +133,23 @@ final readonly class SyncEndpoint
         ]);
     }
 
-    /** Keys as protocol §5.5 allows them, each with a ULID. */
-    private function validProposals(mixed $proposals): bool
+    /**
+     * Keys as protocol §5.5 allows them, each with a ULID that appears once in the batch.
+     *
+     * @param  array<string, true>  $seen  the ids of the batch so far
+     */
+    private function validProposals(mixed $proposals, array &$seen): bool
     {
         if (! is_array($proposals)) {
             return true; // the array rule reports it
         }
 
         foreach ($proposals as $key => $syncId) {
-            if (preg_match(self::PROPOSAL_KEY, (string) $key) !== 1 || ! is_string($syncId) || preg_match(self::ULID, $syncId) !== 1) {
+            if (preg_match(self::PROPOSAL_KEY, (string) $key) !== 1 || ! is_string($syncId) || preg_match(self::ULID, $syncId) !== 1 || isset($seen[$syncId])) {
                 return false;
             }
+
+            $seen[$syncId] = true;
         }
 
         return true;

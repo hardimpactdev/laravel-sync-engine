@@ -25,6 +25,22 @@ final class Aliases
         return is_string($to) ? $to : null;
     }
 
+    /** In any scope. */
+    public static function taken(string $entity, string $syncId): bool
+    {
+        return DB::table(Config::aliasesTable())->where('entity', $entity)->where('from_sync_id', $syncId)->exists();
+    }
+
+    /** Whether `$from` is an alias of `$to`, of any entity. */
+    public static function links(int $scopeId, string $from, string $to): bool
+    {
+        return DB::table(Config::aliasesTable())
+            ->where('scope_id', $scopeId)
+            ->where('from_sync_id', $from)
+            ->where('to_sync_id', $to)
+            ->exists();
+    }
+
     public static function remember(int $scopeId, string $entity, string $from, string $to): void
     {
         DB::table(Config::aliasesTable())->insertOrIgnore([

@@ -41,6 +41,12 @@ final class Tombstones
         return DB::table(self::table())->where('scope_id', $scopeId)->where('entity', $entity)->where('sync_id', $syncId)->exists();
     }
 
+    /** In any scope. */
+    public static function recorded(string $entity, string $syncId): bool
+    {
+        return DB::table(self::table())->where('entity', $entity)->where('sync_id', $syncId)->exists();
+    }
+
     public static function seqOf(string $entity, string $syncId): ?int
     {
         $seq = DB::table(self::table())->where('entity', $entity)->where('sync_id', $syncId)->value('change_seq');

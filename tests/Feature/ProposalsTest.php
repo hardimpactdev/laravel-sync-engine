@@ -73,7 +73,55 @@ it('acks the existing row an action used, and reaches it through the proposed id
         ->and($garage->fresh()->name)->toBe('Big garage');
 });
 
-it('makes the row under a fresh id when the proposed id is taken, and aliases it', function (): void {
+it('makes a fresh row for a proposed id a live row has, and never reaches that row', function (): void {
+    $attic = Room::create(['scope_id' => 1, 'name' => 'Attic']);
+
+    $batch = [
+        change(1, 'items', 200, 'upsert', ['fields' => ['name' => 'Kettle']]),
+        shelve(2, 200, 'Garage', ['room' => $attic->sync_id]),
+    ];
+    $response = push([
+        ...$batch,
+        change(3, 'rooms', 0, 'upsert', ['id' => $attic->sync_id, 'fields' => ['name' => 'Loft']]),
+        change(4, 'rooms', 0, 'delete', ['id' => $attic->sync_id]),
+        change(5, 'items', 201, 'upsert', ['fields' => ['name' => 'Ladder', 'room_id' => $attic->sync_id]]),
+    ]);
+
+    $made = $response->json('acks.1.made.room');
+
+    expect($made)->toMatch('/^[0-9A-HJKMNP-TV-Z]{26}$/')->not->toBe($attic->sync_id)
+        ->and(Room::query()->where('sync_id', $made)->sole()->name)->toBe('Garage')
+        ->and(array_map(fn (array $ack): ?string => $ack['error']['code'] ?? null, array_slice($response->json('acks'), 2)))->toBe(['parent_rejected', 'parent_rejected', 'parent_rejected'])
+        ->and($attic->fresh()?->name)->toBe('Attic')
+        ->and(DB::table('sync_aliases')->count())->toBe(0);
+
+    // A resend repeats the ack, and the id stays dead for the rest of the batch.
+    $again = push([...$batch, change(6, 'rooms', 0, 'upsert', ['id' => $attic->sync_id, 'fields' => ['name' => 'Loft']])]);
+
+    expect($again->json('acks.1.made.room'))->toBe($made)
+        ->and($again->json('acks.2.error.code'))->toBe('parent_rejected')
+        ->and($attic->fresh()?->name)->toBe('Attic');
+});
+
+it('never moves an existing alias of a proposed id', function (): void {
+    $kitchen = Room::create(['scope_id' => 1, 'name' => 'Kitchen']);
+    push([change(1, 'rooms', 100, 'upsert', ['fields' => ['name' => 'kitchen']])])->assertJsonPath('acks.0.remap.to', $kitchen->sync_id);
+
+    $response = push([
+        change(2, 'items', 200, 'upsert', ['fields' => ['name' => 'Kettle']]),
+        shelve(3, 200, 'Garage', ['room' => id(100)]),
+        change(4, 'rooms', 100, 'upsert', ['fields' => ['name' => 'Big kitchen']]),
+        change(5, 'items', 201, 'upsert', ['fields' => ['name' => 'Ladder', 'room_id' => id(100)]]),
+    ]);
+
+    expect($response->json('acks.1.made.room'))->not->toBeIn([id(100), $kitchen->sync_id])
+        ->and($response->json('acks.2.error.code'))->toBe('parent_rejected')
+        ->and($response->json('acks.3.error.code'))->toBe('parent_rejected')
+        ->and($kitchen->fresh()?->name)->toBe('Kitchen')
+        ->and(DB::table('sync_aliases')->pluck('to_sync_id', 'from_sync_id')->all())->toBe([id(100) => $kitchen->sync_id]);
+});
+
+it('makes a fresh row for a proposed id of a soft-deleted row, which keeps its id when restored', function (): void {
     $attic = Room::create(['scope_id' => 1, 'name' => 'Attic']);
     $attic->delete();
 
@@ -83,30 +131,46 @@ it('makes the row under a fresh id when the proposed id is taken, and aliases it
         change(3, 'items', 201, 'upsert', ['fields' => ['name' => 'Ladder', 'room_id' => $attic->sync_id]]),
     ]);
 
-    $made = $response->json('acks.1.made.room');
-    $garage = Room::query()->sole();
+    expect($response->json('acks.1.made.room'))->not->toBe($attic->sync_id)
+        ->and($response->json('acks.2.error.code'))->toBe('parent_rejected')
+        ->and(DB::table('sync_aliases')->count())->toBe(0);
 
-    expect($made)->toMatch('/^[0-9A-HJKMNP-TV-Z]{26}$/')->not->toBe($attic->sync_id)
-        ->and($garage->sync_id)->toBe($made)
-        ->and(Item::query()->where('sync_id', id(201))->sole()->room_id)->toBe($garage->id);
+    $attic->restore();
+
+    $later = push([change(4, 'rooms', 0, 'upsert', ['id' => $attic->sync_id, 'fields' => ['name' => 'Loft']])]);
+
+    expect($later->json('acks.0.status'))->toBe('applied')
+        ->and($later->json('acks.0'))->not->toHaveKey('remap')
+        ->and($attic->fresh()?->name)->toBe('Loft');
 });
 
-it('hands a proposed id out once, and never aliases a live row away', function (): void {
+it('makes a fresh row for a proposed id that a row of another scope has', function (): void {
+    $theirs = Room::create(['scope_id' => 2, 'name' => 'Theirs']);
+
     $response = push([
         change(1, 'items', 200, 'upsert', ['fields' => ['name' => 'Kettle']]),
-        change(2, 'items', 201, 'upsert', ['fields' => ['name' => 'Ladder']]),
-        shelve(3, 200, 'Garage', ['room' => id(100)]),
-        shelve(4, 201, 'Attic', ['room' => id(100)]),
+        shelve(2, 200, 'Garage', ['room' => $theirs->sync_id]),
     ]);
 
-    expect($response->json('acks.2.made.room'))->toBe(id(100))
-        ->and($response->json('acks.3.made.room'))->not->toBe(id(100))
-        ->and(Room::query()->count())->toBe(2);
+    expect($response->json('acks.1.status'))->toBe('applied')
+        ->and($response->json('acks.1.made.room'))->not->toBe($theirs->sync_id)
+        ->and(Room::query()->where('scope_id', 1)->sole()->name)->toBe('Garage')
+        ->and($theirs->fresh()?->only(['scope_id', 'name']))->toBe(['scope_id' => 2, 'name' => 'Theirs']);
+});
 
-    push([change(5, 'rooms', 100, 'upsert', ['fields' => ['name' => 'Big garage']])])
-        ->assertJsonPath('acks.0', ['change_id' => id(5), 'status' => 'applied', 'seq' => 7]);
+it('makes a fresh row for a proposed id of a soft-deleted row whose tombstone was pruned', function (): void {
+    $attic = Room::create(['scope_id' => 1, 'name' => 'Attic']);
+    $attic->delete();
+    DB::table('sync_tombstones')->delete();
 
-    expect(Room::query()->where('sync_id', id(100))->sole()->name)->toBe('Big garage');
+    $response = push([
+        change(1, 'items', 200, 'upsert', ['fields' => ['name' => 'Kettle']]),
+        shelve(2, 200, 'Garage', ['room' => $attic->sync_id]),
+    ]);
+
+    expect($response->json('acks.1.status'))->toBe('applied')
+        ->and($response->json('acks.1.made.room'))->not->toBe($attic->sync_id)
+        ->and(Room::withTrashed()->count())->toBe(2);
 });
 
 it('lets an action read a proposal first and report its row afterwards', function (): void {
@@ -227,8 +291,21 @@ it('validates proposals in the envelope', function (mixed $proposals): void {
     'key too long' => [[str_repeat('k', 65) => id(100)]],
     'id not a ULID' => [['room' => 'nope']],
     'lower-case id' => [['room' => strtolower(id(100))]],
+    'id twice in one change' => [['room' => id(100), 'label' => id(100)]],
     'more than 50' => [array_combine(array_map(fn (int $n): string => "row{$n}", range(1, 51)), array_map(id(...), range(1, 51)))],
 ]);
+
+it('rejects a batch that proposes one id in two changes', function (): void {
+    push([
+        change(1, 'items', 200, 'upsert', ['fields' => ['name' => 'Kettle']]),
+        shelve(2, 200, 'Garage', ['room' => id(100)]),
+        shelve(3, 200, 'Attic', ['room' => id(100)]),
+    ])
+        ->assertStatus(422)
+        ->assertJsonPath('error.code', 'invalid_request');
+
+    expect(Item::query()->count())->toBe(0);
+});
 
 it('announces proposals in every response', function (): void {
     push([])->assertOk()->assertJsonPath('features', ['proposals']);

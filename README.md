@@ -213,6 +213,12 @@ is not the proposed id, the server keeps the proposed id as an alias, so later
 changes that use it still reach the row. A key the action did not make is left
 out, and later changes in the batch that need it are rejected.
 
+A proposed id is adopted only when it is free: no row of the table has it, in
+any scope and also soft-deleted, and no tombstone or alias has it. A taken id
+gets a fresh one and no alias, so it can never reach an unrelated row; later
+changes in the batch that need it are rejected. A device that repeats a
+proposed id in one batch gets `422 invalid_request`.
+
 A handler that ignores `$write->proposals` works as before, and so does an
 older device, which sends no proposals: the device gets the server's rows on
 the next pull.

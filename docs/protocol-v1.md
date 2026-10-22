@@ -212,12 +212,16 @@ then address such a row at once, and the answer replaces nothing.
 - A change may carry `proposals`: `{key: sync_id}`, at most 50. A key names a
   row the action makes, in the app's words (`pantry_item`, `purchase`): 1 to 64
   characters of `a-z`, `0-9`, `_`, `-`, `:`, `|` and `.`. Each id is a ULID the
-  device made.
+  device made. Every proposed id appears once in a batch; a request that
+  repeats one gets `422 invalid_request`.
 - The handler asks for each row's id by its key. It gets the proposed id when
   that is unused, else a fresh one. When the action uses a row that exists
   already instead, the handler says so. Both ways, the server remembers a
   proposed id that it did not adopt as an alias of the row it used (§5.3), so a
   later change that addresses or references the proposed id reaches that row.
+  A proposed id that a row, tombstone or alias has already is not adopted and
+  not aliased: the action makes a fresh row, and a change in the batch that
+  addresses the proposed id is rejected `parent_rejected`.
 - The applied ack carries `made`: `{key: sync_id}` for every key the action
   made or used. The proposed id: the row was made under it. Another id: the
   action made or used that row instead, and the device rewrites the proposed id
