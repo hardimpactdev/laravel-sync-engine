@@ -68,6 +68,7 @@ A **Change**:
 | `merge`       | bool, optional       | Account merge: match by content before inserting (§5.4).      |
 | `position`    | int, optional        | The change's place in this install's outbox. It only grows.   |
 | `client_time` | ISO 8601             | Display and logs only. Never used to order or resolve.        |
+| `proposals`   | object, optional     | Ids for the rows an action makes, by key (§5.5).              |
 
 ### 3.2 Processing
 
@@ -97,7 +98,8 @@ device resends the same batch. Receipts make that safe.
     "cursor": "opaque",
     "has_more": false,
     "last_position": 0,
-    "server_time": "2026-10-20T09:58:14Z"
+    "server_time": "2026-10-20T09:58:14Z",
+    "features": ["proposals"]
 }
 ```
 
@@ -110,6 +112,7 @@ An **Ack**:
 | `seq`       | int, when applied           | The `change_seq` the change produced.                   |
 | `remap`     | `{from, to}`, optional      | The change landed on an existing row (§5.3).            |
 | `overwrote` | string[], optional          | Fields that changed after `base_seq` and were overwritten. Telemetry only. |
+| `made`      | `{key: sync_id}`, optional  | The rows the action made or used, by proposal key (§5.5). |
 | `error`     | `{code, message, fields?}`, when rejected |                                           |
 | `current`   | row or null, when rejected  | The server's row now, so the device can restore it.      |
 
@@ -199,6 +202,38 @@ A change with `merge: true` uses the spec's merge rules: match by `sync_id`
 first, then by content. A match fills in only missing values and acks a remap.
 Counters add up through their named operation.
 
+### 5.5 Proposed rows
+
+An action, such as checking a shopping item off, makes rows on the server: a
+pantry item and a stock movement. The device shows those rows before the server
+answers, under ids it chose, and the server adopts the ids. A later change can
+then address such a row at once, and the answer replaces nothing.
+
+- A change may carry `proposals`: `{key: sync_id}`, at most 50. A key names a
+  row the action makes, in the app's words (`pantry_item`, `purchase`): 1 to 64
+  characters of `a-z`, `0-9`, `_`, `-`, `:`, `|` and `.`. Each id is a ULID the
+  device made.
+- The handler asks for each row's id by its key. It gets the proposed id when
+  that is unused, else a fresh one. When the action uses a row that exists
+  already instead, the handler says so. Both ways, the server remembers a
+  proposed id that it did not adopt as an alias of the row it used (§5.3), so a
+  later change that addresses or references the proposed id reaches that row.
+- The applied ack carries `made`: `{key: sync_id}` for every key the action
+  made or used. The proposed id: the row was made under it. Another id: the
+  action made or used that row instead, and the device rewrites the proposed id
+  to it as for a remap. A missing key: the action made no such row, and the
+  device removes its row and the unsent changes that need it.
+- Within a batch, a change that addresses or references a proposed id of a
+  rejected change, or of a key the action did not make, is rejected
+  `parent_rejected`.
+- The receipt keeps the ack with `made`, so a duplicate repeats it.
+- Every response carries `features: ["proposals"]`. A device sends `proposals`
+  only after a server announced it, so an older server never gets them. Until
+  then the device keeps such rows read-only, until the server's own rows
+  arrive.
+- Known limit: cooking a meal proposes no rows. Its snapshots, shortfalls and
+  stock movements stay provisional on the device until the next pull.
+
 ## 6. Device obligations
 
 - **One writer.** Every write goes through the store, which writes the row and
@@ -209,6 +244,8 @@ Counters add up through their named operation.
   rejected list with its values.
 - **Order.** Entries are sent in their outbox order. Entries whose `depends_on`
   files are not uploaded wait.
+- **Proposed rows.** Send `proposals` only to a server that announced
+  `features: ["proposals"]`. Apply `made` with the ack, before the page.
 - **Rebase on pull.** For each pulled row: write server values except fields
   with a pending upsert; add pending deltas to counter fields; keep a row with a
   pending delete hidden; a pulled tombstone deletes the row and drops its
