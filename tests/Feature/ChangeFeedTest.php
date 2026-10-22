@@ -124,7 +124,7 @@ it('sends deletes as tombstones and soft deletes the same way', function (): voi
     $kettle = Item::create(['scope_id' => 1, 'name' => 'Kettle']);
     $cursor = pull()->json('cursor');
 
-    $kitchen->delete();
+    $kitchen->forceDelete();
     $kettle->delete();
 
     pull(['cursor' => $cursor])->assertOk()->assertJsonPath('changes', [

@@ -38,6 +38,7 @@ abstract class TestCase extends Orchestra
             $table->unsignedBigInteger('change_seq')->nullable();
             $table->string('name');
             $table->timestamps();
+            $table->softDeletes();
         });
 
         Schema::create('counters', function (Blueprint $table): void {
