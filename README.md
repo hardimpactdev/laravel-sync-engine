@@ -174,6 +174,49 @@ devices that both add "Kitchen" get one row). A handler rejects a change by
 throwing a `ValidationException` or a `SyncRejection`; the device gets the
 error and the server's current row.
 
+### Adopt the device's ids for rows an action makes
+
+An action can make rows on the server, such as a pantry item when a shopping
+item is checked off. The device shows those rows at once, under ids it chose,
+and sends the ids with the change as `proposals`, by key (protocol §5.5). The
+handler adopts them through `$write->proposals`:
+
+```php
+public function operate(SyncWrite $write, string $operation): Model
+{
+    $item = $write->existing;
+    $pantryItem = PantryItem::firstWhere(['team_id' => $write->scopeId, 'name' => $item->name]);
+
+    if ($pantryItem !== null) {
+        // The action used a row that exists already.
+        $write->proposals->used('pantry_item', 'pantry_items', $pantryItem->sync_id);
+    } else {
+        // The proposed id when it is unused, else a fresh one.
+        $pantryItem = app(CreatePantryItem::class)->handle($write->scopeId, $write->proposals->id('pantry_item', 'pantry_items'), $item->name);
+    }
+
+    return app(CheckOff::class)->handle($item, $pantryItem);
+}
+```
+
+If your action learns only afterwards whether it made a row, read the id
+first with `adoptable()`, which records nothing and returns null when the id
+cannot be adopted. Then report the row the action made or used with `used()`:
+
+```php
+$pantryItem = app(CheckOff::class)->handle($item, syncId: $write->proposals->adoptable('pantry_item', 'pantry_items'));
+$write->proposals->used('pantry_item', 'pantry_items', $pantryItem->sync_id);
+```
+
+The ack tells the device the id of each row the action made or used. When that
+is not the proposed id, the server keeps the proposed id as an alias, so later
+changes that use it still reach the row. A key the action did not make is left
+out, and later changes in the batch that need it are rejected.
+
+A handler that ignores `$write->proposals` works as before, and so does an
+older device, which sends no proposals: the device gets the server's rows on
+the next pull.
+
 Register your entities in a service provider:
 
 ```php

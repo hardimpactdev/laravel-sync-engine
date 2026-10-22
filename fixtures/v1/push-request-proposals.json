@@ -1,0 +1,26 @@
+{
+    "protocol": 1,
+    "client_id": "01JBC4Y0R8T5D8M4QKX3N2V6ZA",
+    "cursor": "opaque-cursor-2",
+    "entities": [
+        "items",
+        "rooms"
+    ],
+    "changes": [
+        {
+            "change_id": "01JBC6B1C2D3E4F5G6H7J8K9M0",
+            "entity": "items",
+            "id": "01JBC59ZQ0B2D4F6H8K0M2P4R6",
+            "op": "shelve",
+            "args": {
+                "room_name": "Garage"
+            },
+            "proposals": {
+                "room": "01JBC6B0Z9Y8X7W6V5T4S3R2Q1"
+            },
+            "base_seq": 4190,
+            "position": 4,
+            "client_time": "2026-10-20T10:02:41.733Z"
+        }
+    ]
+}

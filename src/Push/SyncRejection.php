@@ -24,6 +24,12 @@ final class SyncRejection extends RuntimeException
         return new self('parent_rejected', "The row that {$field} points to does not exist.");
     }
 
+    /** The id is one an earlier change in the batch proposed but did not make (protocol §5.5). */
+    public static function notMade(string $field): self
+    {
+        return new self('parent_rejected', "{$field} names a row that was not made.");
+    }
+
     public static function readOnly(string $field): self
     {
         return new self('read_only_field', "The {$field} field cannot be changed from a device.");

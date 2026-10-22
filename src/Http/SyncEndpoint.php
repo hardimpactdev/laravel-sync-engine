@@ -12,6 +12,7 @@ use HardImpact\SyncEngine\Push\PushApplier;
 use HardImpact\SyncEngine\SyncCursor;
 use HardImpact\SyncEngine\SyncEntities;
 use HardImpact\SyncEngine\SyncSequence;
+use Illuminate\Contracts\Validation\Validator as ValidatorContract;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Date;
@@ -27,6 +28,10 @@ use Illuminate\Validation\Rule;
  */
 final readonly class SyncEndpoint
 {
+    private const string ULID = '/^[0-9A-HJKMNP-TV-Z]{26}$/';
+
+    private const string PROPOSAL_KEY = '/^[a-z0-9_\-:|.]{1,64}$/';
+
     public function __construct(
         private SyncEntities $entities,
         private SyncFeed $feed,
@@ -53,15 +58,15 @@ final readonly class SyncEndpoint
         }
 
         $validator = Validator::make($request->all(), [
-            'client_id' => ['required', 'string', 'regex:/^[0-9A-HJKMNP-TV-Z]{26}$/'],
+            'client_id' => ['required', 'string', 'regex:'.self::ULID],
             'cursor' => ['nullable', 'string', 'max:2048'],
             'entities' => ['required', 'array', 'min:1'],
             'entities.*' => ['required', 'string', 'distinct', Rule::in($this->entities->names())],
             'changes' => ['present', 'array', 'max:100'],
             'changes.*' => ['array'],
-            'changes.*.change_id' => ['required', 'string', 'distinct', 'regex:/^[0-9A-HJKMNP-TV-Z]{26}$/'],
+            'changes.*.change_id' => ['required', 'string', 'distinct', 'regex:'.self::ULID],
             'changes.*.entity' => ['required', 'string', 'max:64'],
-            'changes.*.id' => ['required', 'string', 'regex:/^[0-9A-HJKMNP-TV-Z]{26}$/'],
+            'changes.*.id' => ['required', 'string', 'regex:'.self::ULID],
             'changes.*.op' => ['required', 'string', 'max:64'],
             'changes.*.fields' => ['sometimes', 'array'],
             'changes.*.args' => ['sometimes', 'array'],
@@ -70,8 +75,18 @@ final readonly class SyncEndpoint
             'changes.*.merge' => ['sometimes', 'boolean'],
             'changes.*.position' => ['sometimes', 'integer', 'min:1'],
             'changes.*.client_time' => ['sometimes', 'nullable', 'string', 'max:64'],
+            'changes.*.proposals' => ['sometimes', 'array', 'max:50'],
             'limit' => ['nullable', 'integer', 'min:1', 'max:'.Config::pageSize()],
         ]);
+
+        // On the raw input: the validator rewrites dots in keys.
+        $validator->after(function (ValidatorContract $validator) use ($request): void {
+            foreach ((array) $request->input('changes') as $index => $change) {
+                if (! $this->validProposals(is_array($change) ? ($change['proposals'] ?? []) : [])) {
+                    $validator->errors()->add("changes.{$index}.proposals", 'Each proposal maps a key to a ULID.');
+                }
+            }
+        });
 
         if ($validator->fails()) {
             /** @var array<string, list<string>> $fields */
@@ -82,7 +97,7 @@ final readonly class SyncEndpoint
 
         /** @var array{client_id: string, cursor?: string|null, entities: list<string>, limit?: int|null} $input */
         $input = $validator->validated();
-        /** @var list<array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int}> $changes */
+        /** @var list<array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int, proposals?: array<string, string>}> $changes */
         $changes = array_values((array) $request->input('changes'));
 
         $afterSeq = SyncCursor::decode($input['cursor'] ?? null, $scopeId);
@@ -110,6 +125,23 @@ final readonly class SyncEndpoint
             'has_more' => $page->hasMore,
             'last_position' => $this->push->lastPosition($scopeId, $input['client_id']),
             'server_time' => Date::now()->utc()->format('Y-m-d\TH:i:s\Z'),
+            'features' => ['proposals'],
         ]);
+    }
+
+    /** Keys as protocol §5.5 allows them, each with a ULID. */
+    private function validProposals(mixed $proposals): bool
+    {
+        if (! is_array($proposals)) {
+            return true; // the array rule reports it
+        }
+
+        foreach ($proposals as $key => $syncId) {
+            if (preg_match(self::PROPOSAL_KEY, (string) $key) !== 1 || ! is_string($syncId) || preg_match(self::ULID, $syncId) !== 1) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

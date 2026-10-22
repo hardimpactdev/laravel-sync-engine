@@ -206,7 +206,8 @@ it('validates the envelope', function (array $body, int $status, string $code): 
 it('answers in the shape of the protocol fixture', function (): void {
     Item::create(['scope_id' => 1, 'name' => 'Kettle']);
 
-    $fixture = json_decode((string) file_get_contents(__DIR__.'/../../fixtures/v1/push-response.json'), true);
+    // The newest response shape, with `features`.
+    $fixture = json_decode((string) file_get_contents(__DIR__.'/../../fixtures/v1/push-response-proposals.json'), true);
 
     expect(array_keys(pull()->json()))->toBe(array_keys($fixture))
         ->and(array_keys(pull()->json('changes.0')))->toBe(array_keys($fixture['changes'][0]));
