@@ -9,7 +9,8 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * One pushed change, as the entity's handler sees it. References in `fields`
  * and `args` are already resolved: a reference field holds the referenced
- * Model, or null.
+ * Model, or null. `proposals` gives the ids for the rows the change makes
+ * (protocol §5.5).
  */
 final readonly class SyncWrite
 {
@@ -25,5 +26,6 @@ final readonly class SyncWrite
         public array $args,
         public ?Model $existing,
         public bool $merge,
+        public ProposedRows $proposals = new ProposedRows,
     ) {}
 }

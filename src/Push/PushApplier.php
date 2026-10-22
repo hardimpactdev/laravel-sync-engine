@@ -20,7 +20,11 @@ use Illuminate\Validation\ValidationException;
  * (protocol §3.2). Receipts make a resend a duplicate. The whole batch shares
  * one transaction, so it commits, and pokes, once.
  *
- * @phpstan-type Change array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int}
+ * A change may propose ids for the rows its action makes (§5.5). The batch
+ * keeps the proposed ids that reach no row, and refuses later changes that
+ * need them.
+ *
+ * @phpstan-type Change array{change_id: string, entity: string, id: string, op: string, fields?: array<string, mixed>, args?: array<string, mixed>, base_seq?: int|null, depends_on?: list<string>, merge?: bool, position?: int, proposals?: array<string, string>}
  * @phpstan-type Ack array<string, mixed>
  */
 final readonly class PushApplier
@@ -46,9 +50,12 @@ final readonly class PushApplier
 
             $acks = [];
             $position = 0;
+            $proposed = new ProposedIds($scopeId);
 
             foreach ($changes as $change) {
-                $acks[] = $this->applyOne($scopeId, $clientId, $change);
+                $ack = $this->applyOne($scopeId, $clientId, $change, $proposed);
+                $proposed->settle($change['proposals'] ?? [], $ack);
+                $acks[] = $ack;
                 $position = max($position, $change['position'] ?? 0);
             }
 
@@ -70,7 +77,7 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return Ack
      */
-    private function applyOne(int $scopeId, string $clientId, array $change): array
+    private function applyOne(int $scopeId, string $clientId, array $change, ProposedIds $proposed): array
     {
         $hash = hash('sha256', (string) json_encode(array_diff_key($change, ['client_time' => true])));
         $receipt = DB::table(Config::receiptsTable())
@@ -87,11 +94,22 @@ final readonly class PushApplier
             /** @var Ack $stored */
             $stored = json_decode($receipt->ack, true, flags: JSON_THROW_ON_ERROR);
 
-            return $stored['status'] === 'rejected' ? $stored : [...$stored, 'status' => 'duplicate'];
+            if ($stored['status'] === 'rejected') {
+                return $stored;
+            }
+
+            // JSON gives an empty `made` back as a list; the wire wants an object.
+            $made = $stored['made'] ?? null;
+
+            if (is_array($made)) {
+                $stored['made'] = (object) $made;
+            }
+
+            return [...$stored, 'status' => 'duplicate'];
         }
 
         try {
-            $ack = DB::transaction(fn (): array => $this->write($scopeId, $clientId, $change));
+            $ack = DB::transaction(fn (): array => $this->write($scopeId, $clientId, $change, $proposed));
         } catch (ValidationException $invalid) {
             /** @var array<string, list<string>> $fields */
             $fields = $invalid->errors();
@@ -119,23 +137,60 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return Ack
      */
-    private function write(int $scopeId, string $clientId, array $change): array
+    private function write(int $scopeId, string $clientId, array $change, ProposedIds $proposed): array
     {
         if (! $this->entities->has($change['entity'])) {
             throw SyncRejection::unknownEntity($change['entity']);
         }
 
         $entity = $this->entities->get($change['entity']);
-        $syncId = $this->alias($scopeId, $entity->name(), $change['id']) ?? $change['id'];
+        $this->refuseNotMade($entity, $change, $proposed);
+
+        $syncId = Aliases::of($scopeId, $entity->name(), $change['id']) ?? $change['id'];
         $existing = $entity->find($scopeId, $syncId);
         $remap = $syncId !== $change['id'] ? ['from' => $change['id'], 'to' => $syncId] : null;
         $merge = $change['merge'] ?? false;
+        $proposals = new ProposedRows($change['proposals'] ?? [], $scopeId, $this->entities, $proposed);
 
-        return match ($change['op']) {
-            'upsert' => $this->upsert($entity, $scopeId, $clientId, $change, $syncId, $existing, $remap, $merge),
-            'delete' => $this->delete($entity, $scopeId, $clientId, $change, $syncId, $existing),
-            default => $this->operate($entity, $scopeId, $clientId, $change, $syncId, $existing, $remap),
+        $ack = match ($change['op']) {
+            'upsert' => $this->upsert($entity, $scopeId, $clientId, $change, $syncId, $existing, $remap, $merge, $proposals),
+            'delete' => $this->delete($entity, $scopeId, $clientId, $change, $syncId, $existing, $proposals),
+            default => $this->operate($entity, $scopeId, $clientId, $change, $syncId, $existing, $remap, $proposals),
         };
+
+        // Only a change that proposed ids gets `made`, so other acks stay as they were.
+        if (array_key_exists('proposals', $change)) {
+            $ack['made'] = (object) $proposals->made();
+        }
+
+        return $ack;
+    }
+
+    /**
+     * Refuses a change that addresses or references an id an earlier change in
+     * the batch proposed but did not make.
+     *
+     * @param  Change  $change
+     */
+    private function refuseNotMade(SyncEntity $entity, array $change, ProposedIds $proposed): void
+    {
+        if ($proposed->isDead($change['id'])) {
+            throw SyncRejection::notMade('id');
+        }
+
+        $values = match ($change['op']) {
+            'upsert' => $change['fields'] ?? [],
+            'delete' => [],
+            default => $change['args'] ?? [],
+        };
+
+        foreach (array_keys($entity->references()) as $field) {
+            $id = $values[$field] ?? null;
+
+            if (is_string($id) && $proposed->isDead($id)) {
+                throw SyncRejection::notMade($field);
+            }
+        }
     }
 
     /**
@@ -143,7 +198,7 @@ final readonly class PushApplier
      * @param  array{from: string, to: string}|null  $remap
      * @return Ack
      */
-    private function upsert(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap, bool $merge): array
+    private function upsert(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap, bool $merge, ProposedRows $proposals): array
     {
         $fields = $change['fields'] ?? [];
 
@@ -157,13 +212,13 @@ final readonly class PushApplier
             throw SyncRejection::deleted();
         }
 
-        $write = new SyncWrite($scopeId, $clientId, $syncId, $this->resolve($entity, $scopeId, $fields), [], $existing, $merge);
+        $write = new SyncWrite($scopeId, $clientId, $syncId, $this->resolve($entity, $scopeId, $fields), [], $existing, $merge, $proposals);
 
         if ($existing === null && ($match = $entity->match($write)) !== null) {
             $to = $this->syncIdOf($match);
-            $this->rememberAlias($scopeId, $entity->name(), $change['id'], $to);
+            Aliases::remember($scopeId, $entity->name(), $change['id'], $to);
             $remap = ['from' => $change['id'], 'to' => $to];
-            $write = new SyncWrite($scopeId, $clientId, $to, $write->fields, [], $match, $merge);
+            $write = new SyncWrite($scopeId, $clientId, $to, $write->fields, [], $match, $merge, $proposals);
 
             // A plain match keeps the existing row; a merge fills in what it lacks.
             if (! $merge) {
@@ -182,13 +237,13 @@ final readonly class PushApplier
      * @param  Change  $change
      * @return Ack
      */
-    private function delete(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing): array
+    private function delete(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ProposedRows $proposals): array
     {
         if ($existing === null) {
             return ['change_id' => $change['change_id'], 'status' => 'applied'];
         }
 
-        $entity->delete(new SyncWrite($scopeId, $clientId, $syncId, [], [], $existing, false), $existing);
+        $entity->delete(new SyncWrite($scopeId, $clientId, $syncId, [], [], $existing, false, $proposals), $existing);
 
         return ['change_id' => $change['change_id'], 'status' => 'applied', 'seq' => Tombstones::seqOf($entity->name(), $syncId)];
     }
@@ -198,18 +253,18 @@ final readonly class PushApplier
      * @param  array{from: string, to: string}|null  $remap
      * @return Ack
      */
-    private function operate(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap): array
+    private function operate(SyncEntity $entity, int $scopeId, string $clientId, array $change, string $syncId, ?Model $existing, ?array $remap, ProposedRows $proposals): array
     {
         if (! in_array($change['op'], $entity->operations(), true)) {
             throw SyncRejection::unknownOperation($change['op']);
         }
 
-        $write = new SyncWrite($scopeId, $clientId, $syncId, [], $this->resolve($entity, $scopeId, $change['args'] ?? []), $existing, false);
+        $write = new SyncWrite($scopeId, $clientId, $syncId, [], $this->resolve($entity, $scopeId, $change['args'] ?? []), $existing, false, $proposals);
         $model = $entity->operate($write, $change['op']);
         $to = $this->syncIdOf($model);
 
         if ($to !== $syncId) {
-            $this->rememberAlias($scopeId, $entity->name(), $change['id'], $to);
+            Aliases::remember($scopeId, $entity->name(), $change['id'], $to);
             $remap = ['from' => $change['id'], 'to' => $to];
         }
 
@@ -230,7 +285,7 @@ final readonly class PushApplier
             }
 
             $id = is_string($values[$field]) ? $values[$field] : '';
-            $id = $this->alias($scopeId, $target, $id) ?? $id;
+            $id = Aliases::of($scopeId, $target, $id) ?? $id;
             $values[$field] = $this->entities->get($target)->find($scopeId, $id) ?? throw SyncRejection::parentRejected($field);
         }
 
@@ -303,32 +358,10 @@ final readonly class PushApplier
         }
 
         $entity = $this->entities->get($change['entity']);
-        $syncId = $this->alias($scopeId, $entity->name(), $change['id']) ?? $change['id'];
+        $syncId = Aliases::of($scopeId, $entity->name(), $change['id']) ?? $change['id'];
         $model = $entity->find($scopeId, $syncId);
 
         return $model === null ? null : $entity->row($model);
-    }
-
-    private function alias(int $scopeId, string $entity, string $syncId): ?string
-    {
-        $to = DB::table(Config::aliasesTable())
-            ->where('scope_id', $scopeId)
-            ->where('entity', $entity)
-            ->where('from_sync_id', $syncId)
-            ->value('to_sync_id');
-
-        return is_string($to) ? $to : null;
-    }
-
-    private function rememberAlias(int $scopeId, string $entity, string $from, string $to): void
-    {
-        DB::table(Config::aliasesTable())->insertOrIgnore([
-            'scope_id' => $scopeId,
-            'entity' => $entity,
-            'from_sync_id' => $from,
-            'to_sync_id' => $to,
-            'created_at' => Date::now(),
-        ]);
     }
 
     private function recordClient(int $scopeId, string $clientId, int $position): void
